@@ -685,7 +685,7 @@
     <script>
         let haChart, normChart;
         let haCandleSeries, normCandleSeries;
-        let volumeSeries, hmaSeries, hma800Series, volSmaSeries, ema9Series, ema21Series;
+        let volumeSeries, hmaSeries, hma800Series, volSmaSeries, ema9Series, ema21Series, normEma9Series, normEma21Series, normHmaSeries, normHma800Series;
         
         let haSlLine = null, haTpLine = null, haEntryLine = null;
         let normSlLine = null, normTpLine = null, normEntryLine = null;
@@ -924,6 +924,35 @@
                 },
             });
 
+            // Standard chart indicator overlays
+            normHmaSeries = normChart.addSeries(LightweightCharts.LineSeries, {
+                color: '#8b80f9',
+                lineWidth: 1.5,
+                title: '',
+                lineStyle: 2, // Dashed
+            });
+
+            normHma800Series = normChart.addSeries(LightweightCharts.LineSeries, {
+                color: '#ff7f50',
+                lineWidth: 3,
+                title: '',
+                lineStyle: 0, // Solid
+            });
+
+            normEma9Series = normChart.addSeries(LightweightCharts.LineSeries, {
+                color: '#10b981',
+                lineWidth: 1.5,
+                title: '',
+                lineStyle: 0, // Solid
+            });
+
+            normEma21Series = normChart.addSeries(LightweightCharts.LineSeries, {
+                color: '#f43f5e',
+                lineWidth: 1.5,
+                title: '',
+                lineStyle: 0, // Solid
+            });
+
             // Subscribe to crosshair move on Heikin Ashi chart
             haChart.subscribeCrosshairMove(param => {
                 if (param && param.time) {
@@ -960,6 +989,21 @@
                 if (normChart) {
                     normChart.resize(wNorm, 500);
                 }
+            });
+
+            // Synchronize scroll and zoom visible logical ranges in real-time
+            let isSyncing = false;
+            haChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                if (isSyncing || !range || !normChart) return;
+                isSyncing = true;
+                normChart.timeScale().setVisibleLogicalRange(range);
+                isSyncing = false;
+            });
+            normChart.timeScale().subscribeVisibleLogicalRangeChange(range => {
+                if (isSyncing || !range || !haChart) return;
+                isSyncing = true;
+                haChart.timeScale().setVisibleLogicalRange(range);
+                isSyncing = false;
             });
         }
 
@@ -1014,17 +1058,22 @@
             // Set Local HMA (only on 15m)
             if (currentTimeframe === "15m" && payload.hma200 && payload.hma200.length > 0) {
                 hmaSeries.setData(payload.hma200);
+                normHmaSeries.setData(payload.hma200);
             } else {
                 hmaSeries.setData([]);
+                normHmaSeries.setData([]);
             }
 
             // Set Macro HMA (800 HMA on 15m, or 200 HMA on 1h)
             if (currentTimeframe === "1h" && payload.hma200 && payload.hma200.length > 0) {
                 hma800Series.setData(payload.hma200);
+                normHma800Series.setData(payload.hma200);
             } else if (currentTimeframe === "15m" && payload.hma800 && payload.hma800.length > 0) {
                 hma800Series.setData(payload.hma800);
+                normHma800Series.setData(payload.hma800);
             } else {
                 hma800Series.setData([]);
+                normHma800Series.setData([]);
             }
             
             // Set Vol SMA
@@ -1037,14 +1086,18 @@
             // Set EMAs
             if (payload.ema9 && payload.ema9.length > 0) {
                 ema9Series.setData(payload.ema9);
+                normEma9Series.setData(payload.ema9);
             } else {
                 ema9Series.setData([]);
+                normEma9Series.setData([]);
             }
 
             if (payload.ema21 && payload.ema21.length > 0) {
                 ema21Series.setData(payload.ema21);
+                normEma21Series.setData(payload.ema21);
             } else {
                 ema21Series.setData([]);
+                normEma21Series.setData([]);
             }
             
             // Set Markers (BUY/SELL tags) on both charts
@@ -1100,9 +1153,17 @@
                             time: candle.time,
                             value: indicators.trend_val
                         });
+                        normHmaSeries.update({
+                            time: candle.time,
+                            value: indicators.trend_val
+                        });
                     }
                     if (indicators.macro_val !== undefined) {
                         hma800Series.update({
+                            time: candle.time,
+                            value: indicators.macro_val
+                        });
+                        normHma800Series.update({
                             time: candle.time,
                             value: indicators.macro_val
                         });
@@ -1112,9 +1173,17 @@
                             time: candle.time,
                             value: indicators.ema9
                         });
+                        normEma9Series.update({
+                            time: candle.time,
+                            value: indicators.ema9
+                        });
                     }
                     if (indicators.ema21 !== undefined) {
                         ema21Series.update({
+                            time: candle.time,
+                            value: indicators.ema21
+                        });
+                        normEma21Series.update({
                             time: candle.time,
                             value: indicators.ema21
                         });
@@ -1122,6 +1191,10 @@
                 } else if (currentTimeframe === "1h") {
                     if (indicators.trend_val !== undefined) {
                         hma800Series.update({
+                            time: candle.time,
+                            value: indicators.trend_val
+                        });
+                        normHma800Series.update({
                             time: candle.time,
                             value: indicators.trend_val
                         });

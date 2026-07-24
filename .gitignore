@@ -1,0 +1,21 @@
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Core caching & persistent states
+cache/
+data/trade_ledger.csv
+data/*.csv
+
+# Environments & credentials
+.env
+venv/
+env/
+.venv/
+
+# Editor / System configurations
+.vscode/
+.idea/
+.DS_Store

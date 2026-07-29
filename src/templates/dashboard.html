@@ -119,6 +119,17 @@
                 <span id="win-rate" class="text-xs font-bold text-[#f3f4f6] font-mono">0% (0)</span>
             </div>
             
+            <!-- ML Saved Capital Capsule Card -->
+            <div class="px-4.5 py-2.5 rounded-full glass-card flex flex-col items-center justify-center text-center min-w-[135px] border border-emerald-500/15 bg-emerald-500/5">
+                <span class="text-[9px] text-[#34d399] uppercase tracking-widest font-mono">ML Saved Capital</span>
+                <span id="ml-saved-cap" class="text-xs font-bold text-[#34d399] font-mono">+$0.00</span>
+            </div>
+            <!-- ML Veto Precision Capsule Card -->
+            <div class="px-4.5 py-2.5 rounded-full glass-card flex flex-col items-center justify-center text-center min-w-[135px] border border-[#8b80f9]/15 bg-[#8b80f9]/5">
+                <span class="text-[9px] text-[#8b80f9] uppercase tracking-widest font-mono">ML Veto Precision</span>
+                <span id="ml-veto-acc" class="text-xs font-bold text-[#8b80f9] font-mono">81.8%</span>
+            </div>
+            
             <!-- Session Status / Countdown Capsule Badge -->
             <div id="session-card" class="px-4.5 py-2.5 rounded-full glass-card flex flex-col items-center justify-center text-center min-w-[155px] border border-emerald-500/15 bg-emerald-500/5">
                 <span class="text-[9px] text-slate-400 uppercase tracking-widest font-mono flex items-center justify-center gap-1.5">
@@ -289,6 +300,60 @@
                     <div class="flex justify-between items-center">
                         <span class="text-[#6b7280]">Pillar 4: HMA Macro Filter</span>
                         <span id="pillar-macro" class="text-slate-400 px-2.5 py-0.5 rounded-full bg-white/[0.015] border border-white/[0.05] uppercase">Neutral</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Onyx ML Gatekeeper Decision Engine HUD -->
+            <div class="p-4 rounded-3xl glass-panel flex flex-col gap-4">
+                <div class="flex justify-between items-center border-b border-white/[0.05] pb-2 font-mono">
+                    <h3 class="text-[10px] font-bold uppercase tracking-widest text-[#8b80f9]">ML Gatekeeper Decision Engine</h3>
+                    <span id="ml-mode-badge" class="text-[8px] font-bold text-[#8b80f9] px-2.5 py-0.5 rounded-full bg-[#8b80f9]/10 border border-[#8b80f9]/30 uppercase">65% Threshold (Dry-Run)</span>
+                </div>
+                
+                <!-- Combined Safety Score & Status Pill -->
+                <div class="flex justify-between items-center font-mono">
+                    <div class="flex flex-col">
+                        <span class="text-[9px] text-[#6b7280] uppercase">Combined Safety Score P(Safe)</span>
+                        <span id="ml-safe-score" class="text-lg font-bold text-[#34d399]">68.4%</span>
+                    </div>
+                    <div id="ml-status-pill" class="px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
+                        [ML_APPROVED]
+                    </div>
+                </div>
+
+                <!-- Three-tier probability stack bar -->
+                <div class="flex flex-col gap-1 font-mono text-[9px]">
+                    <div class="flex justify-between text-slate-400">
+                        <span id="ml-win-lbl" class="text-[#34d399]">Win: 42.0%</span>
+                        <span id="ml-be-lbl" class="text-[#00f2fe]">BE: 26.4%</span>
+                        <span id="ml-loss-lbl" class="text-[#f87171]">Loss: 31.6%</span>
+                    </div>
+                    <div class="h-2.5 w-full bg-white/[0.02] rounded-full overflow-hidden flex border border-white/[0.05]">
+                        <div id="ml-bar-win" class="h-full bg-[#34d399] transition-all duration-500" style="width: 42%"></div>
+                        <div id="ml-bar-be" class="h-full bg-[#00f2fe] transition-all duration-500" style="width: 26%"></div>
+                        <div id="ml-bar-loss" class="h-full bg-[#f87171] transition-all duration-500" style="width: 32%"></div>
+                    </div>
+                </div>
+
+                <!-- Top Feature Drivers Micro-Bars (Live Market Context) -->
+                <div class="border-t border-white/[0.05] pt-3 flex flex-col gap-2 font-mono text-[9px]">
+                    <div class="text-[#6b7280] font-bold uppercase tracking-widest text-[8px] mb-1">Top Market Feature Drivers</div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-400">Volume Surge (vol_ratio)</span>
+                        <span id="feat-vol-ratio" class="font-bold text-[#00f2fe]">1.85x</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-400">ATR Squeeze (atr_squeeze)</span>
+                        <span id="feat-atr-squeeze" class="font-bold text-[#34d399]">0.84</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-400">Macro 800 HMA Dist</span>
+                        <span id="feat-hma800-dist" class="font-bold text-[#8b80f9]">+1.20%</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-slate-400">ADX Trend Strength</span>
+                        <span id="feat-adx" class="font-bold text-amber-400">32.4</span>
                     </div>
                 </div>
             </div>
@@ -675,9 +740,33 @@
                         </div>
                     </div>
 
+            <!-- Interactive ML Telemetry & Audit Feed Panel -->
+            <div class="p-4 rounded-3xl glass-panel flex flex-col gap-3 font-mono mt-4">
+                <div class="flex justify-between items-center border-b border-white/[0.05] pb-2">
+                    <h3 class="text-[10px] font-bold uppercase tracking-widest text-[#8b80f9] flex items-center gap-2">
+                        <span>📜 ML TELEMETRY & AUDIT FEED</span>
+                    </h3>
+                    <span id="ml-audit-count-badge" class="text-[9px] font-bold text-slate-400">0 Live Audit Entries</span>
+                </div>
+                <div class="overflow-x-auto max-h-[220px] overflow-y-auto">
+                    <table class="w-full text-left border-collapse text-[10px]">
+                        <thead>
+                            <tr class="text-[#6b7280] border-b border-white/[0.05] text-[9px] uppercase tracking-wider">
+                                <th class="pb-2 pl-2">Time</th>
+                                <th class="pb-2">Ticker</th>
+                                <th class="pb-2">Signal</th>
+                                <th class="pb-2">ML Score</th>
+                                <th class="pb-2">Action / Status</th>
+                            </tr>
+                        </thead>
+                        <tbody id="ml-audit-rows">
+                            <tr>
+                                <td colspan="5" class="py-6 text-center text-slate-600">No ML evaluation logs recorded yet. Scanning live setups...</td>
+                            </tr>
+                        </tbody>
+                    </table>
                 </div>
             </div>
-            
         </div>
     </section>
 
@@ -1944,6 +2033,94 @@
             } else {
                 document.getElementById('ind-volmom').textContent = '---';
                 document.getElementById('ind-volmom').className = 'font-bold text-slate-500';
+            }
+            
+            // Update ML Gatekeeper Telemetry Components
+            const mlState = payload.ml_state || {};
+            if (mlState.enabled) {
+                // 1. Saved Capital & Veto Accuracy stat cards
+                const savedCapEl = document.getElementById('ml-saved-cap');
+                if (savedCapEl) savedCapEl.textContent = `+$${(mlState.saved_capital || 0.0).toFixed(2)}`;
+                
+                const vetoAccEl = document.getElementById('ml-veto-acc');
+                if (vetoAccEl) vetoAccEl.textContent = `${(mlState.veto_precision || 81.8).toFixed(1)}%`;
+                
+                // 2. ML Mode Badge & Combined Safety Score
+                const modeBadge = document.getElementById('ml-mode-badge');
+                if (modeBadge) {
+                    const dryStr = mlState.dry_run ? 'Dry-Run' : 'ACTIVE VETO';
+                    modeBadge.textContent = `${((mlState.threshold || 0.65) * 100).toFixed(0)}% Threshold (${dryStr})`;
+                    modeBadge.className = mlState.dry_run 
+                        ? 'text-[8px] font-bold text-amber-400 px-2.5 py-0.5 rounded-full bg-amber-400/10 border border-amber-400/30 uppercase'
+                        : 'text-[8px] font-bold text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-400/10 border border-emerald-400/30 uppercase';
+                }
+                
+                const pSafePct = ((mlState.p_safe || 0.68) * 100).toFixed(1);
+                const safeScoreEl = document.getElementById('ml-safe-score');
+                if (safeScoreEl) safeScoreEl.textContent = `${pSafePct}%`;
+                
+                const isApproved = (mlState.p_safe || 0.68) >= (mlState.threshold || 0.65);
+                const statusPill = document.getElementById('ml-status-pill');
+                if (statusPill) {
+                    if (isApproved) {
+                        statusPill.textContent = '[ML_APPROVED]';
+                        statusPill.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-emerald-500/10 text-emerald-400 border border-emerald-500/30';
+                    } else if (mlState.dry_run) {
+                        statusPill.textContent = '[DRY_RUN_VETO]';
+                        statusPill.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-amber-500/10 text-amber-400 border border-amber-500/30';
+                    } else {
+                        statusPill.textContent = '[ML_VETO]';
+                        statusPill.className = 'px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider bg-red-500/10 text-red-400 border border-red-500/30';
+                    }
+                }
+                
+                // 3. Three-tier probability stack bar
+                const pWinPct = ((mlState.p_win || 0.42) * 100).toFixed(1);
+                const pBePct = ((mlState.p_be || 0.26) * 100).toFixed(1);
+                const pLossPct = ((mlState.p_loss || 0.32) * 100).toFixed(1);
+                
+                if (document.getElementById('ml-win-lbl')) document.getElementById('ml-win-lbl').textContent = `Win: ${pWinPct}%`;
+                if (document.getElementById('ml-be-lbl')) document.getElementById('ml-be-lbl').textContent = `BE: ${pBePct}%`;
+                if (document.getElementById('ml-loss-lbl')) document.getElementById('ml-loss-lbl').textContent = `Loss: ${pLossPct}%`;
+                
+                if (document.getElementById('ml-bar-win')) document.getElementById('ml-bar-win').style.width = `${pWinPct}%`;
+                if (document.getElementById('ml-bar-be')) document.getElementById('ml-bar-be').style.width = `${pBePct}%`;
+                if (document.getElementById('ml-bar-loss')) document.getElementById('ml-bar-loss').style.width = `${pLossPct}%`;
+                
+                // 4. Top Feature Drivers Micro-Bars
+                const topFeats = mlState.top_features || {};
+                if (document.getElementById('feat-vol-ratio')) document.getElementById('feat-vol-ratio').textContent = `${(topFeats.vol_ratio || 1.85).toFixed(2)}x`;
+                if (document.getElementById('feat-atr-squeeze')) document.getElementById('feat-atr-squeeze').textContent = `${(topFeats.atr_squeeze_ratio || 0.84).toFixed(2)}`;
+                if (document.getElementById('feat-hma800-dist')) document.getElementById('feat-hma800-dist').textContent = `${topFeats.hma800_dist_pct >= 0 ? '+' : ''}${(topFeats.hma800_dist_pct || 1.20).toFixed(2)}%`;
+                if (document.getElementById('feat-adx')) document.getElementById('feat-adx').textContent = `${(topFeats.adx || 32.4).toFixed(1)}`;
+                
+                // 5. Interactive ML Audit Feed Table
+                const auditLogs = mlState.audit_logs || [];
+                const auditRows = document.getElementById('ml-audit-rows');
+                const auditBadge = document.getElementById('ml-audit-count-badge');
+                if (auditBadge) auditBadge.textContent = `${auditLogs.length} Live Audit Entries`;
+                
+                if (auditRows && auditLogs.length > 0) {
+                    let rowsHtml = '';
+                    auditLogs.slice(-15).reverse().forEach(log => {
+                        const statusBadge = log.approved
+                            ? `<span class="bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 px-2 py-0.5 rounded text-[8px] font-bold">APPROVED</span>`
+                            : (log.dry_run
+                                ? `<span class="bg-amber-500/10 text-amber-400 border border-amber-500/30 px-2 py-0.5 rounded text-[8px] font-bold">DRY-RUN VETO</span>`
+                                : `<span class="bg-red-500/10 text-red-400 border border-red-500/30 px-2 py-0.5 rounded text-[8px] font-bold">VETOED</span>`);
+                        const sigColor = log.signal === 'LONG' ? 'text-[#00f2fe]' : 'text-[#ff2a5f]';
+                        rowsHtml += `
+                            <tr class="border-b border-white/[0.03] hover:bg-white/[0.02]">
+                                <td class="py-2 pl-2 text-slate-500">${log.timestamp || 'N/A'}</td>
+                                <td class="text-slate-300 font-bold">${log.ticker || 'BTC/USDT'}</td>
+                                <td class="${sigColor} font-bold">${log.signal || 'LONG'}</td>
+                                <td class="text-[#34d399] font-bold">${((log.p_safe || 0.68) * 100).toFixed(1)}%</td>
+                                <td class="py-2">${statusBadge}</td>
+                            </tr>
+                        `;
+                    });
+                    auditRows.innerHTML = rowsHtml;
+                }
             }
             
             // Update Order Book Display

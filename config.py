@@ -72,6 +72,11 @@ class TalksyConfig:
     SIMULATION_MODE = False  # Set to True for fast-ticking simulation
     SIMULATION_TICK_SECS = 0.5  # Accelerated ticking for test runs
     
+    # Machine Learning Gatekeeper Settings
+    USE_ML_GATEKEEPER = True      # Enable ML probabilistic classifier filter
+    ML_DRY_RUN = True             # True: Log [ML_VETO] scores without blocking trades; False: Actively block trades
+    ML_CONFIDENCE_THRESHOLD = 0.65  # Minimum Safe Trade probability (P_Safe >= 65%)
+    
     PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
     CACHE_DIR = os.path.join(PROJECT_ROOT, "cache")
     

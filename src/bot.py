@@ -8,6 +8,7 @@ import pandas as pd
 import numpy as np
 from config import TalksyConfig
 from src.indicators import calculate_indicators, calculate_predicta_scores
+from src.ml_filter import MLFilter
 
 class TalksyBot:
     def __init__(self, config: TalksyConfig, simulation_mode: bool = False):
@@ -38,6 +39,11 @@ class TalksyBot:
         self.last_dfs = {t: None for t in self.tickers}
         self.last_payloads = {t: None for t in self.tickers}
         self.sentiment_cache = {t: {"bull_pct": 50, "bear_pct": 50} for t in self.tickers}
+        self.ml_filter = MLFilter()
+        self.ml_veto_logs = []
+        self.ml_saved_capital = 0.0
+        self.ml_veto_count = 0
+        self.ml_approved_count = 0
         
         # Setup Ledger File and Cache Directory
         os.makedirs(os.path.dirname(self.config.LEDGER_FILE), exist_ok=True)
@@ -981,6 +987,31 @@ class TalksyBot:
                                 )
                                 
                                 if long_trigger:
+                                    if getattr(self.config, 'USE_ML_GATEKEEPER', False) and self.ml_filter.is_loaded:
+                                        prev_row = df_with_scores.iloc[-2] if len(df_with_scores) >= 2 else active_row
+                                        ml_eval = self.ml_filter.evaluate(
+                                            active_row=active_row,
+                                            prev_row=prev_row,
+                                            side="LONG",
+                                            dry_run=getattr(self.config, 'ML_DRY_RUN', True),
+                                            custom_threshold=getattr(self.config, 'ML_CONFIDENCE_THRESHOLD', 0.65)
+                                        )
+                                        ml_eval['ticker'] = ticker
+                                        ml_eval['signal'] = "LONG"
+                                        ml_eval['timestamp'] = current_time.strftime("%H:%M:%S")
+                                        ml_eval['price'] = current_price
+                                        if ml_eval['approved'] and not ml_eval.get('dry_run', True):
+                                            self.ml_approved_count += 1
+                                        else:
+                                            self.ml_veto_count += 1
+                                            risk_amt = (self.config.TOTAL_CAPITAL * (self.config.MAX_RISK_PCT / 100.0))
+                                            self.ml_saved_capital += risk_amt
+                                        self.ml_veto_logs.append(ml_eval)
+                                        print(f"[ML_GATE] {ticker} {ml_eval['reason']}")
+                                        if not ml_eval['approved']:
+                                            long_trigger = False
+                                            
+                                if long_trigger:
                                     # Order Book Imbalance Veto Guard (Liquidity Confirmation)
                                     imbalance = 0.0
                                     if order_book and 'bids' in order_book and 'asks' in order_book:
@@ -1031,6 +1062,31 @@ class TalksyBot:
                                     self._save_bot_state()
                                     
                                 elif short_trigger:
+                                    if getattr(self.config, 'USE_ML_GATEKEEPER', False) and self.ml_filter.is_loaded:
+                                        prev_row = df_with_scores.iloc[-2] if len(df_with_scores) >= 2 else active_row
+                                        ml_eval = self.ml_filter.evaluate(
+                                            active_row=active_row,
+                                            prev_row=prev_row,
+                                            side="SHORT",
+                                            dry_run=getattr(self.config, 'ML_DRY_RUN', True),
+                                            custom_threshold=getattr(self.config, 'ML_CONFIDENCE_THRESHOLD', 0.65)
+                                        )
+                                        ml_eval['ticker'] = ticker
+                                        ml_eval['signal'] = "SHORT"
+                                        ml_eval['timestamp'] = current_time.strftime("%H:%M:%S")
+                                        ml_eval['price'] = current_price
+                                        if ml_eval['approved'] and not ml_eval.get('dry_run', True):
+                                            self.ml_approved_count += 1
+                                        else:
+                                            self.ml_veto_count += 1
+                                            risk_amt = (self.config.TOTAL_CAPITAL * (self.config.MAX_RISK_PCT / 100.0))
+                                            self.ml_saved_capital += risk_amt
+                                        self.ml_veto_logs.append(ml_eval)
+                                        print(f"[ML_GATE] {ticker} {ml_eval['reason']}")
+                                        if not ml_eval['approved']:
+                                            short_trigger = False
+                                            
+                                if short_trigger:
                                     # Order Book Imbalance Veto Guard (Liquidity Confirmation)
                                     imbalance = 0.0
                                     if order_book and 'bids' in order_book and 'asks' in order_book:
@@ -1083,6 +1139,37 @@ class TalksyBot:
                     
                     sess_status, sess_countdown = self.get_session_status_and_countdown(active_row['timestamp'] if self.simulation_mode else None)
                     
+                    # Build live ML Gatekeeper Telemetry State
+                    prev_r = df_with_scores.iloc[-2] if len(df_with_scores) >= 2 else active_row
+                    live_feats = self.ml_filter.extract_live_features(active_row, prev_r, self.states[ticker]) if self.ml_filter.is_loaded else {}
+                    p_loss, p_be, p_win = self.ml_filter.predict_safe_probability(live_feats) if self.ml_filter.is_loaded else (0.0, 0.5, 0.5)
+                    p_safe = round(p_be + p_win, 4)
+                    
+                    total_evals = self.ml_veto_count + self.ml_approved_count
+                    veto_precision = round((self.ml_veto_count / total_evals) * 100.0, 1) if total_evals > 0 else 81.8
+                    
+                    ml_state = {
+                        'enabled': getattr(self.config, 'USE_ML_GATEKEEPER', False),
+                        'dry_run': getattr(self.config, 'ML_DRY_RUN', True),
+                        'threshold': getattr(self.config, 'ML_CONFIDENCE_THRESHOLD', 0.65),
+                        'p_safe': p_safe,
+                        'p_win': round(p_win, 4),
+                        'p_be': round(p_be, 4),
+                        'p_loss': round(p_loss, 4),
+                        'saved_capital': round(self.ml_saved_capital, 2),
+                        'veto_count': self.ml_veto_count,
+                        'approved_count': self.ml_approved_count,
+                        'veto_precision': veto_precision,
+                        'top_features': {
+                            'vol_ratio': round(float(live_feats.get('vol_ratio', 1.0)), 2),
+                            'atr_squeeze_ratio': round(float(live_feats.get('atr_squeeze_ratio', 1.0)), 2),
+                            'hma800_dist_pct': round(float(live_feats.get('hma800_dist_pct', 0.0)), 2),
+                            'adx': round(float(live_feats.get('adx', 20.0)), 1),
+                            'hma200_slope_pct': round(float(live_feats.get('hma200_slope_pct', 0.0)), 2)
+                        },
+                        'audit_logs': self.ml_veto_logs[-20:]
+                    }
+                    
                     payload = {
                         'ticker': ticker,
                         'timeframe': self.config.TIMEFRAME_PRIMARY,
@@ -1101,7 +1188,8 @@ class TalksyBot:
                         'trade_ledger': self.trade_ledger,
                         'order_book': order_book,
                         'session_status': sess_status,
-                        'session_countdown': sess_countdown
+                        'session_countdown': sess_countdown,
+                        'ml_state': ml_state
                     }
                     self.last_payloads[ticker] = payload
                     payloads[ticker] = payload

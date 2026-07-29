@@ -96,9 +96,24 @@ class TalksyBot:
                 with open(self.config.LEDGER_FILE, 'r', newline='') as f:
                     reader = csv.DictReader(f)
                     for row in reader:
+                        # Extract UNIX timestamps in local timezone for browser compatibility
+                        entry_ts = 0
+                        exit_ts = 0
+                        try:
+                            if row.get('entry_time'):
+                                dt_ent = datetime.strptime(row['entry_time'], "%Y-%m-%d %H:%M:%S")
+                                entry_ts = int(dt_ent.timestamp())
+                            if row.get('exit_time'):
+                                dt_ex = datetime.strptime(row['exit_time'], "%Y-%m-%d %H:%M:%S")
+                                exit_ts = int(dt_ex.timestamp())
+                        except Exception:
+                            pass
+
                         self.trade_ledger.append({
                             'entry_time': row.get('entry_time', ''),
                             'exit_time': row.get('exit_time', ''),
+                            'entry_timestamp': entry_ts,
+                            'exit_timestamp': exit_ts,
                             'ticker': row.get('ticker', ''),
                             'type': row.get('type', ''),
                             'entry_price': float(row.get('entry_price', 0.0)),
@@ -418,7 +433,67 @@ class TalksyBot:
                 total += self.contracts[t] * (self.entry_prices[t] - current_prices[t])
         return total
 
-    def get_historical_telemetry(self, ticker: str = None, timeframe: str = "15m") -> dict:
+    def reconstruct_trade_audit_prices(self, trade: dict, df: pd.DataFrame) -> dict:
+        """Reconstruct initial SL (SL-1), initial TP (TP-1), and trailed SL (SL-2) for auditing."""
+        try:
+            entry_dt = datetime.strptime(trade['entry_time'], "%Y-%m-%d %H:%M:%S")
+            entry_ts_ms = int(entry_dt.timestamp() * 1000)
+            
+            # Find closest matching timestamp in df
+            if df.empty:
+                return {}
+            diffs = (df['timestamp'] - entry_ts_ms).abs()
+            entry_idx = diffs.idxmin()
+            
+            row = df.loc[entry_idx]
+            atr = float(row['atr']) if 'atr' in row and not pd.isna(row['atr']) else 0.0
+            
+            # Locate entry candle position in integer indices to lookback last 3 candles
+            int_idx = df.index.get_loc(entry_idx)
+            start_idx = max(0, int_idx - 2)
+            recent_3 = df.iloc[start_idx : int_idx + 1]
+            
+            hvn_idx = recent_3['volume'].idxmax()
+            hvn_price = float(recent_3.loc[hvn_idx, 'close'])
+            
+            entry_price = float(trade['entry_price'])
+            exit_price = float(trade['exit_price'])
+            
+            # Initial Stop Loss
+            if trade['type'] == 'LONG':
+                sl_initial = hvn_price - (self.config.SL_ATR_CUSHION * atr)
+                sl_initial = min(sl_initial, entry_price - ((self.config.SL_ATR_CUSHION + 0.5) * atr))
+            else:
+                sl_initial = hvn_price + (self.config.SL_ATR_CUSHION * atr)
+                sl_initial = max(sl_initial, entry_price + ((self.config.SL_ATR_CUSHION + 0.5) * atr))
+            sl_initial = max(sl_initial, 0.01)
+            
+            # Initial Take Profit
+            initial_risk = abs(entry_price - sl_initial)
+            if trade['type'] == 'LONG':
+                tp_initial = entry_price + (self.config.RISK_REWARD_RATIO * initial_risk)
+            else:
+                tp_initial = entry_price - (self.config.RISK_REWARD_RATIO * initial_risk)
+                
+            # Trailed Stop Loss (if hit SL cause but ended better than entry)
+            sl_trailed = None
+            cause_label = trade.get('cause', '')
+            if cause_label and 'SL' in cause_label:
+                is_long_trailed = (trade['type'] == 'LONG' and exit_price > entry_price)
+                is_short_trailed = (trade['type'] == 'SHORT' and exit_price < entry_price)
+                if is_long_trailed or is_short_trailed:
+                    sl_trailed = exit_price
+                    
+            return {
+                'sl_initial': sl_initial,
+                'tp_initial': tp_initial,
+                'sl_trailed': sl_trailed
+            }
+        except Exception as e:
+            print(f"[WARN] Failed to reconstruct audit prices: {e}")
+            return {}
+
+    def get_historical_telemetry(self, ticker: str = None, timeframe: str = "15m", audit_index: int = None) -> dict:
         """Returns the full historical series data for a specific symbol's chart initialization."""
         if ticker is None:
             ticker = self.config.TICKER
@@ -570,6 +645,17 @@ class TalksyBot:
             except Exception as e:
                 print(f"[WARN] Failed to parse ledger markers: {e}")
                 
+        # Reconstruct audit prices if requested
+        audit_details = {}
+        if audit_index is not None:
+            try:
+                idx = int(audit_index) - 1
+                if 0 <= idx < len(self.trade_ledger):
+                    trade = self.trade_ledger[idx]
+                    audit_details = self.reconstruct_trade_audit_prices(trade, df)
+            except Exception as e:
+                print(f"[WARN] Telemetry audit parse failed: {e}")
+                
         return {
             'candles': candles,
             'ha_candles': ha_candles,
@@ -579,7 +665,8 @@ class TalksyBot:
             'vol_sma': vol_sma,
             'markers': markers,
             'ema9': ema9,
-            'ema21': ema21
+            'ema21': ema21,
+            'audit_details': audit_details
         }
 
     async def process_tick(self, dfs: dict[str, pd.DataFrame], order_books: dict[str, dict]) -> dict[str, dict]:
@@ -821,9 +908,18 @@ class TalksyBot:
                             self.balance += pnl_dollar
                             exit_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
                             
+                            entry_ts_sec = 0
+                            try:
+                                dt_ent = datetime.strptime(self.entry_times[ticker], "%Y-%m-%d %H:%M:%S")
+                                entry_ts_sec = int(dt_ent.timestamp())
+                            except Exception:
+                                pass
+                            
                             trade_record = {
                                 'entry_time': self.entry_times[ticker],
                                 'exit_time': exit_time_str,
+                                'entry_timestamp': entry_ts_sec,
+                                'exit_timestamp': int(current_time.timestamp()),
                                 'ticker': ticker,
                                 'type': ticker_state,
                                 'entry_price': self.entry_prices[ticker],

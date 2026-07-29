@@ -667,6 +667,11 @@
                                 <span class="flex-1 border-b border-dotted border-white/[0.05] mx-2"></span>
                                 <span id="det-balance" class="text-[#f3f4f6] font-semibold">---</span>
                             </div>
+                            <!-- Auditor Log Console -->
+                            <div id="audit-log-container" class="hidden mt-3 p-2.5 rounded bg-black/50 border border-white/[0.04] text-[9px] text-slate-400 font-mono flex flex-col gap-1 max-h-[120px] overflow-y-auto">
+                                <div class="text-[#00f2fe] font-bold border-b border-white/[0.05] pb-1 uppercase tracking-wider">Auditor Console</div>
+                                <div id="audit-log-lines" class="flex flex-col gap-0.5 mt-1"></div>
+                            </div>
                         </div>
                     </div>
 
@@ -683,6 +688,23 @@
 
     <!-- Interactive script code -->
     <script>
+        window.onerror = function(message, filename, lineno, colno, error) {
+            const errData = {
+                message: message,
+                filename: filename,
+                lineno: lineno,
+                colno: colno,
+                stack: error ? error.stack : ''
+            };
+            console.error("[Global Error] ", errData);
+            fetch('/log_error', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(errData)
+            }).catch(e => {});
+            return false;
+        };
+
         let haChart, normChart;
         let haCandleSeries, normCandleSeries;
         let volumeSeries, hmaSeries, hma800Series, volSmaSeries, ema9Series, ema21Series, normEma9Series, normEma21Series, normHmaSeries, normHma800Series;
@@ -815,20 +837,20 @@
                         const d = new Date(time * 1000);
                         const pad = (n) => n.toString().padStart(2, '0');
                         if (tickMarkType === 0 || tickMarkType === 1) { // year or month
-                            return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}`;
+                            return `${d.getFullYear()}-${pad(d.getMonth()+1)}`;
                         }
                         if (tickMarkType === 2) { // day of month
-                            return `${pad(d.getUTCDate())}`;
+                            return `${pad(d.getDate())}`;
                         }
                         // time
-                        return `${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`;
+                        return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
                     }
                 },
                 localization: {
                     timeFormatter: (time) => {
                         const d = new Date(time * 1000);
                         const pad = (n) => n.toString().padStart(2, '0');
-                        return `${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())} UTC`;
+                        return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())} IST`;
                     }
                 }
             };
@@ -1114,9 +1136,13 @@
             
             // Auto-scale price & timescales to fit new symbol data
             setTimeout(() => {
-                if (haChart) haChart.timeScale().fitContent();
-                if (normChart) normChart.timeScale().fitContent();
-            }, 100);
+                if (window.activeAuditTrade && window.activeAuditTrade.ticker === currentSymbol) {
+                    executeTradeAudit(window.activeAuditTrade);
+                } else {
+                    if (haChart) haChart.timeScale().fitContent();
+                    if (normChart) normChart.timeScale().fitContent();
+                }
+            }, 150);
         }
 
         // Update Charts on real-time WS Tick
@@ -1304,6 +1330,344 @@
             });
         }
 
+        let normEntryLineObj = null;
+        let haEntryLineObj = null;
+        let normExitLineObj = null;
+        let haExitLineObj = null;
+        
+        let normSlInitialLineObj = null;
+        let haSlInitialLineObj = null;
+        let normTpInitialLineObj = null;
+        let haTpInitialLineObj = null;
+        let normSlTrailedLineObj = null;
+        let haSlTrailedLineObj = null;
+        
+        window.activeAuditTrade = null;
+
+        function auditLog(msg, isError = false) {
+            console.log("[AuditLog] " + msg);
+            const container = document.getElementById('audit-log-container');
+            const lines = document.getElementById('audit-log-lines');
+            if (container && lines) {
+                container.classList.remove('hidden');
+                const div = document.createElement('div');
+                div.className = isError ? "text-[#ff2a5f] font-semibold" : "text-slate-300";
+                div.textContent = `[${new Date().toLocaleTimeString()}] ${msg}`;
+                lines.appendChild(div);
+                container.scrollTop = container.scrollHeight;
+            }
+        }
+
+        function calculateClientSideAudit(trade, entryTs) {
+            if (!allNormCandles || allNormCandles.length === 0) {
+                auditLog("WARN: allNormCandles is empty!", true);
+                return null;
+            }
+            
+            const entryIdx = allNormCandles.findIndex(c => c.time === entryTs);
+            if (entryIdx === -1) {
+                auditLog(`CRITICAL: Entry candle matching timestamp ${entryTs} (${new Date(entryTs * 1000).toLocaleString()}) not found in chart history!`, true);
+                if (allNormCandles.length > 0) {
+                    auditLog(`Chart range: ${new Date(allNormCandles[0].time * 1000).toLocaleString()} to ${new Date(allNormCandles[allNormCandles.length - 1].time * 1000).toLocaleString()}`);
+                }
+                return null;
+            }
+            
+            auditLog(`Found entry candle at index ${entryIdx}. Price: $${allNormCandles[entryIdx].close}`);
+            
+            // 1. Calculate True Range (TR) for all candles up to entryIdx
+            const trs = [];
+            for (let i = 0; i <= entryIdx; i++) {
+                const c = allNormCandles[i];
+                if (i === 0) {
+                    trs.push(c.high - c.low);
+                } else {
+                    const prev = allNormCandles[i - 1];
+                    const tr = Math.max(
+                        c.high - c.low,
+                        Math.abs(c.high - prev.close),
+                        Math.abs(c.low - prev.close)
+                    );
+                    trs.push(tr);
+                }
+            }
+            
+            // 2. Calculate ATR (14) at entryIdx using Wilder's EMA smoothing
+            let atr = 0;
+            if (trs.length >= 14) {
+                let sum = 0;
+                for (let i = 0; i < 14; i++) {
+                    sum += trs[i];
+                }
+                atr = sum / 14;
+                for (let i = 14; i <= entryIdx; i++) {
+                    atr = (atr * 13 + trs[i]) / 14;
+                }
+            } else {
+                let sum = 0;
+                for (let i = 0; i < trs.length; i++) {
+                    sum += trs[i];
+                }
+                atr = trs.length > 0 ? (sum / trs.length) : 0.05 * trade.entry_price;
+            }
+            
+            // 3. Reconstruct HVN Price (last 3 candles: entryIdx - 2 to entryIdx)
+            let hvn_price = trade.entry_price;
+            let maxVol = -1;
+            const startIdx = Math.max(0, entryIdx - 2);
+            for (let i = startIdx; i <= entryIdx; i++) {
+                const c = allNormCandles[i];
+                const vol = volumeMap[c.time] || 0;
+                if (vol > maxVol) {
+                    maxVol = vol;
+                    hvn_price = c.close;
+                }
+            }
+            
+            const entry_price = Number(trade.entry_price);
+            const exit_price = Number(trade.exit_price);
+            
+            // 4. Initial SL (SL-1)
+            let sl_initial = 0;
+            if (trade.type === 'LONG') {
+                sl_initial = hvn_price - (1.5 * atr);
+                sl_initial = Math.min(sl_initial, entry_price - (2.0 * atr));
+            } else {
+                sl_initial = hvn_price + (1.5 * atr);
+                sl_initial = Math.max(sl_initial, entry_price + (2.0 * atr));
+            }
+            sl_initial = Math.max(sl_initial, 0.01);
+            
+            // 5. Initial TP (TP-1)
+            const initial_risk = Math.abs(entry_price - sl_initial);
+            let tp_initial = 0;
+            if (trade.type === 'LONG') {
+                tp_initial = entry_price + (1.5 * initial_risk);
+            } else {
+                tp_initial = entry_price - (1.5 * initial_risk);
+            }
+            
+            // 6. Trailed SL (SL-2)
+            let sl_trailed = null;
+            const causeLabel = trade.cause || '';
+            if (causeLabel && causeLabel.toUpperCase().includes('SL')) {
+                const isLongTrailed = (trade.type === 'LONG' && exit_price > entry_price);
+                const isShortTrailed = (trade.type === 'SHORT' && exit_price < entry_price);
+                if (isLongTrailed || isShortTrailed) {
+                    sl_trailed = exit_price;
+                }
+            }
+            
+            auditLog(`Calculated ATR: ${atr.toFixed(4)} | HVN Price: $${hvn_price.toFixed(2)}`);
+            auditLog(`SL-1 (Initial): $${sl_initial.toFixed(2)} | TP-1: $${tp_initial.toFixed(2)}`);
+            if (sl_trailed) {
+                auditLog(`SL-2 (Trailed): $${sl_trailed.toFixed(2)}`);
+            }
+            
+            return {
+                sl_initial: sl_initial,
+                tp_initial: tp_initial,
+                sl_trailed: sl_trailed
+            };
+        }
+
+        function clearAuditLines() {
+            const lines = [
+                [normCandleSeries, normEntryLineObj],
+                [haCandleSeries, haEntryLineObj],
+                [normCandleSeries, normExitLineObj],
+                [haCandleSeries, haExitLineObj],
+                [normCandleSeries, normSlInitialLineObj],
+                [haCandleSeries, haSlInitialLineObj],
+                [normCandleSeries, normTpInitialLineObj],
+                [haCandleSeries, haTpInitialLineObj],
+                [normCandleSeries, normSlTrailedLineObj],
+                [haCandleSeries, haSlTrailedLineObj]
+            ];
+            lines.forEach(([series, lineObj]) => {
+                if (lineObj) {
+                    try { series.removePriceLine(lineObj); } catch(e){}
+                }
+            });
+            normEntryLineObj = null;
+            haEntryLineObj = null;
+            normExitLineObj = null;
+            haExitLineObj = null;
+            normSlInitialLineObj = null;
+            haSlInitialLineObj = null;
+            normTpInitialLineObj = null;
+            haTpInitialLineObj = null;
+            normSlTrailedLineObj = null;
+            haSlTrailedLineObj = null;
+            
+            // Restore default candle colors (remove white highlights)
+            if (allNormCandles && allNormCandles.length > 0) {
+                try { normCandleSeries.setData(allNormCandles); } catch(e){}
+            }
+            if (allHaCandles && allHaCandles.length > 0) {
+                try { haCandleSeries.setData(allHaCandles); } catch(e){}
+            }
+        }
+
+        function executeTradeAudit(trade) {
+            clearAuditLines();
+            if (!trade) return;
+
+            let entryTs = Number(trade.entry_timestamp || NaN);
+            let exitTs = Number(trade.exit_timestamp || NaN);
+            
+            if (isNaN(entryTs) || isNaN(exitTs)) {
+                try {
+                    const parseLocal = (str) => {
+                        if (!str) return NaN;
+                        const parts = str.split(' ');
+                        if (parts.length < 2) return NaN;
+                        const dParts = parts[0].split('-');
+                        const tParts = parts[1].split(':');
+                        const d = new Date(
+                            parseInt(dParts[0], 10),
+                            parseInt(dParts[1], 10) - 1,
+                            parseInt(dParts[2], 10),
+                            parseInt(tParts[0], 10),
+                            parseInt(tParts[1], 10),
+                            parseInt(tParts[2], 10)
+                        );
+                        return Math.floor(d.getTime() / 1000);
+                    };
+                    if (isNaN(entryTs)) entryTs = parseLocal(trade.entry_time);
+                    if (isNaN(exitTs)) exitTs = parseLocal(trade.exit_time);
+                } catch(e) {}
+            }
+            
+            // Clear prior logs for readability
+            const lines = document.getElementById('audit-log-lines');
+            if (lines) lines.innerHTML = '';
+            
+            auditLog(`Audit init: Ticker: ${trade.ticker} | Dir: ${trade.type}`);
+            auditLog(`Entry Time: ${trade.entry_time} (${entryTs})`);
+            auditLog(`Exit Time: ${trade.exit_time} (${exitTs})`);
+
+
+            // 1. Highlight Entry and Exit candles in bright White (#ffffff) on both charts
+            if (!isNaN(entryTs) && !isNaN(exitTs)) {
+                if (allNormCandles && allNormCandles.length > 0) {
+                    const highlightedNorm = allNormCandles.map(c => {
+                        if (c.time === entryTs || c.time === exitTs) {
+                            return {
+                                ...c,
+                                color: '#ffffff',
+                                borderColor: '#ffffff',
+                                wickColor: '#ffffff'
+                            };
+                        }
+                        return c;
+                    });
+                    normCandleSeries.setData(highlightedNorm);
+                }
+                
+                if (allHaCandles && allHaCandles.length > 0) {
+                    const highlightedHa = allHaCandles.map(c => {
+                        if (c.time === entryTs || c.time === exitTs) {
+                            return {
+                                ...c,
+                                color: '#ffffff',
+                                borderColor: '#ffffff',
+                                wickColor: '#ffffff'
+                            };
+                        }
+                        return c;
+                    });
+                    haCandleSeries.setData(highlightedHa);
+                }
+            }
+
+            // 2. Draw Entry price line (Solid Blue/Cyan - Highly Visually Distinct)
+            const entryLineOptions = {
+                price: Number(trade.entry_price),
+                color: '#00f2fe',
+                lineWidth: 2.5,
+                lineStyle: 0, // Solid
+                axisLabelVisible: true,
+                title: `ENTRY (${trade.type}) $${Number(trade.entry_price).toFixed(2)}`,
+            };
+            normEntryLineObj = normCandleSeries.createPriceLine(entryLineOptions);
+            haEntryLineObj = haCandleSeries.createPriceLine(entryLineOptions);
+
+            // 3. Draw Exit price line
+            const isWin = Number(trade.pnl || 0.0) >= 0;
+            const causeLabel = trade.cause || 'EXIT';
+            
+            const exitLineOptions = {
+                price: Number(trade.exit_price),
+                color: isWin ? '#10b981' : '#ff2a5f',
+                lineWidth: 2,
+                lineStyle: 2, // Dashed
+                axisLabelVisible: true,
+                title: `${causeLabel} $${Number(trade.exit_price).toFixed(2)} (${isWin ? '+' : ''}${Number(trade.pnl || 0.0).toFixed(2)})`,
+            };
+            normExitLineObj = normCandleSeries.createPriceLine(exitLineOptions);
+            haExitLineObj = haCandleSeries.createPriceLine(exitLineOptions);
+
+            // 4. Draw Reconstructed Audit Lines (SL-1, TP-1, SL-2) if details are available
+            const auditDetails = calculateClientSideAudit(trade, entryTs);
+            if (auditDetails) {
+                // SL-1 (Initial Stop Loss) - Yellowish/Gold (#fbbf24)
+                if (auditDetails.sl_initial !== undefined && auditDetails.sl_initial !== null) {
+                    const slInitOptions = {
+                        price: Number(auditDetails.sl_initial),
+                        color: '#fbbf24',
+                        lineWidth: 1.5,
+                        lineStyle: 2,
+                        axisLabelVisible: true,
+                        title: `SL-1 (Initial) $${Number(auditDetails.sl_initial).toFixed(2)}`,
+                    };
+                    normSlInitialLineObj = normCandleSeries.createPriceLine(slInitOptions);
+                    haSlInitialLineObj = haCandleSeries.createPriceLine(slInitOptions);
+                }
+                
+                // TP-1 (Initial Take Profit) - Emerald/Mint Green (#34d399)
+                if (auditDetails.tp_initial !== undefined && auditDetails.tp_initial !== null) {
+                    const tpInitOptions = {
+                        price: Number(auditDetails.tp_initial),
+                        color: '#34d399',
+                        lineWidth: 1.5,
+                        lineStyle: 2,
+                        axisLabelVisible: true,
+                        title: `TP-1 (Initial) $${Number(auditDetails.tp_initial).toFixed(2)}`,
+                    };
+                    normTpInitialLineObj = normCandleSeries.createPriceLine(tpInitOptions);
+                    haTpInitialLineObj = haCandleSeries.createPriceLine(tpInitOptions);
+                }
+                
+                // SL-2 (Trailed Stop Loss) - Bright Orange (#f59e0b)
+                if (auditDetails.sl_trailed !== undefined && auditDetails.sl_trailed !== null) {
+                    const slTrailOptions = {
+                        price: Number(auditDetails.sl_trailed),
+                        color: '#f59e0b',
+                        lineWidth: 1.8,
+                        lineStyle: 2,
+                        axisLabelVisible: true,
+                        title: `SL-2 (Trailed) $${Number(auditDetails.sl_trailed).toFixed(2)}`,
+                    };
+                    normSlTrailedLineObj = normCandleSeries.createPriceLine(slTrailOptions);
+                    haSlTrailedLineObj = haCandleSeries.createPriceLine(slTrailOptions);
+                }
+            }
+
+            // 5. Focus timescale visible range on the trade duration
+            if (!isNaN(entryTs) && !isNaN(exitTs)) {
+                try {
+                    const buffer = 15 * 60 * 12; // 3 hours buffer
+                    haChart.timeScale().setVisibleRange({
+                        from: entryTs - buffer,
+                        to: exitTs + buffer
+                    });
+                } catch (e) {
+                    console.error("[Audit] TimeScale zoom error:", e);
+                }
+            }
+        }
+
         let selectedTradeIndex = -1;
 
         // Show trade details inside interactive execution timeline diagram
@@ -1311,7 +1675,25 @@
             if (!trade) return;
             
             selectedTradeIndex = index;
-                       // Highlight selected row in ledger table
+            window.activeAuditTrade = trade;
+            
+            // Clear prior logs and show Auditor Console immediately
+            const linesEl = document.getElementById('audit-log-lines');
+            if (linesEl) linesEl.innerHTML = '';
+            auditLog(`Initializing Audit for Trade #${index} (${trade.ticker})`);
+            
+            const symbolChanged = (currentSymbol !== trade.ticker);
+            if (symbolChanged) {
+                auditLog(`Symbol mismatch (current: ${currentSymbol}, trade: ${trade.ticker}). Loading new symbol data...`);
+                currentSymbol = trade.ticker;
+                document.getElementById('ticker-selector').value = trade.ticker;
+                requestSymbolData();
+            } else {
+                auditLog(`Symbol matches active chart. Executing layout overlays...`);
+                executeTradeAudit(trade);
+            }
+            
+            // Highlight selected row in ledger table
             const rows = document.querySelectorAll('#ledger-rows tr');
             rows.forEach(r => {
                 r.classList.remove('bg-white/[0.04]', 'text-white');
@@ -1370,6 +1752,12 @@
         // Return to session summary statistics view
         function showSessionStats() {
             selectedTradeIndex = -1;
+            window.activeAuditTrade = null;
+            clearAuditLines();
+            try {
+                haChart.timeScale().fitContent();
+            } catch(e){}
+            
             const rows = document.querySelectorAll('#ledger-rows tr');
             rows.forEach(r => {
                 r.classList.remove('bg-white/[0.04]', 'text-white');
@@ -2161,13 +2549,23 @@
         }
 
         function requestSymbolData() {
-            console.log("[WS] Requesting symbol change to: " + currentSymbol + " with timeframe: " + currentTimeframe);
+            let auditIndex = null;
+            if (window.activeAuditTrade && window.activeAuditTrade.ticker === currentSymbol) {
+                auditIndex = selectedTradeIndex;
+            }
+            console.log("[WS] Requesting symbol change to: " + currentSymbol + " (Audit ID: " + auditIndex + ")");
             if (activeSocket && activeSocket.readyState === WebSocket.OPEN) {
                 activeSocket.send(JSON.stringify({
                     action: 'select_symbol',
                     symbol: currentSymbol,
-                    timeframe: currentTimeframe
+                    timeframe: currentTimeframe,
+                    audit_index: auditIndex
                 }));
+            } else {
+                console.log("[HTTP] WebSocket offline. Querying history via polling fallback immediately.");
+                if (typeof fetchHistory === 'function') {
+                    fetchHistory();
+                }
             }
         }
 

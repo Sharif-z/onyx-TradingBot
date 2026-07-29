@@ -3,7 +3,7 @@ import os
 import json
 import asyncio
 from datetime import datetime
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 import pandas as pd
@@ -22,6 +22,15 @@ app.mount("/static", StaticFiles(directory=os.path.join(base_dir, "templates")),
 
 # Global reference for sharing the bot instance
 app.state.bot = None
+
+@app.post("/log_error")
+async def log_error(request: Request):
+    try:
+        body = await request.json()
+        print(f"\n❌ [JS_ERROR] {body.get('message')} at {body.get('filename')}:{body.get('lineno')}:{body.get('colno')}\nStack: {body.get('stack')}\n")
+        return {"status": "ok"}
+    except Exception as e:
+        return {"error": str(e)}
 
 class ConnectionManager:
     def __init__(self):
@@ -192,10 +201,11 @@ async def websocket_endpoint(websocket: WebSocket):
                 if msg.get('action') == 'select_symbol':
                     symbol = msg.get('symbol', 'BTC/USDT')
                     timeframe = msg.get('timeframe', '15m')
+                    audit_index = msg.get('audit_index')
                     if symbol in bot.tickers:
                         manager.active_connections[websocket] = symbol
                         manager.active_timeframes[websocket] = timeframe
-                        print(f"[WEB] Client selected focus ticker: {symbol} with timeframe: {timeframe}")
+                        print(f"[WEB] Client selected focus ticker: {symbol} with timeframe: {timeframe} (Audit: {audit_index})")
                         
                         # Fetch the order book for the new symbol immediately!
                         order_book = None
@@ -206,7 +216,7 @@ async def websocket_endpoint(websocket: WebSocket):
                                 pass
                                 
                         # Trigger an immediate init push for the new focused symbol
-                        hist_telemetry = bot.get_historical_telemetry(symbol, timeframe)
+                        hist_telemetry = bot.get_historical_telemetry(symbol, timeframe, audit_index=audit_index)
                         active_payload = bot.last_payloads.get(symbol)
                         if not active_payload:
                             active_payload = {

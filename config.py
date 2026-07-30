@@ -74,7 +74,7 @@ class TalksyConfig:
     
     # Machine Learning Gatekeeper Settings
     USE_ML_GATEKEEPER = True      # Enable ML probabilistic classifier filter
-    ML_DRY_RUN = True             # True: Log [ML_VETO] scores without blocking trades; False: Actively block trades
+    ML_DRY_RUN = False            # False: Actively block trades that fail ML confidence score
     ML_CONFIDENCE_THRESHOLD = 0.65  # Minimum Safe Trade probability (P_Safe >= 65%)
     
     PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))

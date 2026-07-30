@@ -1000,7 +1000,7 @@ class TalksyBot:
                                         ml_eval['signal'] = "LONG"
                                         ml_eval['timestamp'] = current_time.strftime("%H:%M:%S")
                                         ml_eval['price'] = current_price
-                                        if ml_eval['approved'] and not ml_eval.get('dry_run', True):
+                                        if ml_eval['approved']:
                                             self.ml_approved_count += 1
                                         else:
                                             self.ml_veto_count += 1
@@ -1075,7 +1075,7 @@ class TalksyBot:
                                         ml_eval['signal'] = "SHORT"
                                         ml_eval['timestamp'] = current_time.strftime("%H:%M:%S")
                                         ml_eval['price'] = current_price
-                                        if ml_eval['approved'] and not ml_eval.get('dry_run', True):
+                                        if ml_eval['approved']:
                                             self.ml_approved_count += 1
                                         else:
                                             self.ml_veto_count += 1

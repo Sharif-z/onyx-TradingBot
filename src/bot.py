@@ -97,6 +97,10 @@ class TalksyBot:
 
     def _load_ledger(self):
         """Loads transaction ledger history from CSV if it exists."""
+        if self.simulation_mode:
+            self.balance = self.config.INITIAL_BALANCE
+            return  # In simulation mode, start clean without polluting live ledger!
+            
         if os.path.exists(self.config.LEDGER_FILE):
             try:
                 with open(self.config.LEDGER_FILE, 'r', newline='') as f:

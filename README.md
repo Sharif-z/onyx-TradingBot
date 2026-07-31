@@ -6,6 +6,24 @@ The bot combines a deterministic trend-following strategy with a machine learnin
 
 ---
 
+## System Execution Flow
+
+```mermaid
+graph TD
+    A[15m Candle Tick Close] --> B[Calculate EMAs, 200/800 HMAs & Sentiment]
+    B --> C{Strategy Setup Fired?}
+    C -- No --> A
+    C -- Yes (LONG / SHORT) --> D[Extract 24 Technical Features]
+    D --> E[Onyx ML Gatekeeper Engine - 80 Decision Trees]
+    E --> F{P_Safe >= 65%?}
+    F -- No --> G[ML Veto: Cancel Trade Entry]
+    F -- Yes --> H[Calculate Volatility Risk Sizing]
+    H --> I[Order Book Imbalance Check]
+    I --> J[Execute Market Order & Track Break-even SL]
+```
+
+---
+
 ## Strategy & Risk Architecture
 
 ### 1. Trend & Entry Conditions

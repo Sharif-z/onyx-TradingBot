@@ -446,11 +446,15 @@ class TalksyBot:
     def reconstruct_trade_audit_prices(self, trade: dict, df: pd.DataFrame) -> dict:
         """Reconstruct initial SL (SL-1), initial TP (TP-1), and trailed SL (SL-2) for auditing."""
         try:
+            trade_ticker = trade.get('ticker')
+            if trade_ticker and trade_ticker in self.last_dfs and self.last_dfs[trade_ticker] is not None:
+                df = self.last_dfs[trade_ticker]
+                
             entry_dt = datetime.strptime(trade['entry_time'], "%Y-%m-%d %H:%M:%S")
             entry_ts_ms = int(entry_dt.timestamp() * 1000)
             
             # Find closest matching timestamp in df
-            if df.empty:
+            if df is None or df.empty:
                 return {}
             diffs = (df['timestamp'] - entry_ts_ms).abs()
             entry_idx = diffs.idxmin()

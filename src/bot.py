@@ -153,28 +153,35 @@ class TalksyBot:
                         self.last_dfs[ticker] = df
                         
                         last_row = df.iloc[-1]
-                        bull_pct = int(last_row['final_bull_percentage']) if 'final_bull_percentage' in last_row else 50
-                        bear_pct = int(last_row['final_bear_percentage']) if 'final_bear_percentage' in last_row else 50
+                        bull_val = last_row['final_bull_percentage'] if 'final_bull_percentage' in last_row else 50
+                        bear_val = last_row['final_bear_percentage'] if 'final_bear_percentage' in last_row else 50
+                        bull_pct = int(bull_val) if not pd.isna(bull_val) else 50
+                        bear_pct = int(bear_val) if not pd.isna(bear_val) else 50
                         self.sentiment_cache[ticker] = {"bull_pct": bull_pct, "bear_pct": bear_pct}
                         
                         # Reconstruct latest closed candle time
                         self.last_closed_candle_times[ticker] = int(last_row['timestamp'])
                         
+                        rsi_val = last_row.get('rsi', last_row.get('rsi14'))
+                        adx_val = last_row.get('adx', last_row.get('adx14'))
+                        atr_val = last_row.get('atr', last_row.get('atr14'))
+                        vdelta_val = last_row.get('volume_delta', last_row.get('vol_delta', 0.0))
+                        
                         indicators = {
-                            'ha_close': float(last_row['ha_close']),
+                            'ha_close': float(last_row['ha_close']) if 'ha_close' in last_row else float(last_row['close']),
                             'trend_val': float(last_row['trend_baseline']) if 'trend_baseline' in last_row and not pd.isna(last_row['trend_baseline']) else None,
                             'macro_val': float(last_row['macro_baseline']) if 'macro_baseline' in last_row and not pd.isna(last_row['macro_baseline']) else None,
-                            'ema9': float(last_row['ema9']),
-                            'ema21': float(last_row['ema21']),
-                            'rsi': float(last_row['rsi14']) if 'rsi14' in last_row and not pd.isna(last_row['rsi14']) else None,
+                            'ema9': float(last_row['ema9']) if 'ema9' in last_row and not pd.isna(last_row['ema9']) else None,
+                            'ema21': float(last_row['ema21']) if 'ema21' in last_row and not pd.isna(last_row['ema21']) else None,
+                            'rsi': float(rsi_val) if rsi_val is not None and not pd.isna(rsi_val) else None,
                             'stoch_k': float(last_row['stoch_k']) if 'stoch_k' in last_row and not pd.isna(last_row['stoch_k']) else None,
                             'stoch_d': float(last_row['stoch_d']) if 'stoch_d' in last_row and not pd.isna(last_row['stoch_d']) else None,
-                            'adx': float(last_row['adx14']) if 'adx14' in last_row and not pd.isna(last_row['adx14']) else None,
+                            'adx': float(adx_val) if adx_val is not None and not pd.isna(adx_val) else None,
                             'di_diff': float(last_row['di_diff']) if 'di_diff' in last_row and not pd.isna(last_row['di_diff']) else 0.0,
-                            'atr': float(last_row['atr14']) if 'atr14' in last_row and not pd.isna(last_row['atr14']) else None,
+                            'atr': float(atr_val) if atr_val is not None and not pd.isna(atr_val) else None,
                             'volume': float(last_row['volume']),
                             'vol_sma20': float(last_row['vol_sma20']) if 'vol_sma20' in last_row and not pd.isna(last_row['vol_sma20']) else None,
-                            'vol_delta': float(last_row['vol_delta']) if 'vol_delta' in last_row and not pd.isna(last_row['vol_delta']) else 0.0,
+                            'vol_delta': float(vdelta_val) if vdelta_val is not None and not pd.isna(vdelta_val) else 0.0,
                             'trend_direction': str(last_row['trend_direction']) if 'trend_direction' in last_row else 'UP'
                         }
                         
@@ -288,14 +295,15 @@ class TalksyBot:
         try:
             # 1. Determine absolute risk distance per contract unit
             risk_per_unit = abs(entry_price - stop_loss_price)
-            limits = self.config.POSITION_LIMITS[ticker]
+            limits = self.config.POSITION_LIMITS.get(ticker, {"min": 0.1, "max": 1.0, "round_digits": 2})
             
             if risk_per_unit == 0:
                 print(f"[!] Error: Risk distance is zero for {ticker}. Defaulting to minimum size.")
                 return limits["min"]
                 
             # 2. Math Adjuster: static split dollar risk per sandbox
-            sandbox_capital = self.config.TOTAL_CAPITAL / len(self.tickers)
+            num_tickers = max(1, len(self.tickers))
+            sandbox_capital = self.config.TOTAL_CAPITAL / num_tickers
             target_dollar_risk = sandbox_capital * (self.config.MAX_RISK_PCT / 100.0)
             
             # 3. Derive mathematical size needed to risk exactly target_dollar_risk
@@ -462,25 +470,26 @@ class TalksyBot:
             row = df.loc[entry_idx]
             atr = float(row['atr']) if 'atr' in row and not pd.isna(row['atr']) else 0.0
             
-            # Locate entry candle position in integer indices to lookback last 3 candles
+            # Locate entry candle position in integer indices to lookback last 5 candles
             int_idx = df.index.get_loc(entry_idx)
-            start_idx = max(0, int_idx - 2)
-            recent_3 = df.iloc[start_idx : int_idx + 1]
-            
-            hvn_idx = recent_3['volume'].idxmax()
-            hvn_price = float(recent_3.loc[hvn_idx, 'close'])
+            start_idx = max(0, int_idx - 4)
+            recent_5 = df.iloc[start_idx : int_idx + 1]
             
             entry_price = float(trade['entry_price'])
             exit_price = float(trade['exit_price'])
             
-            # Initial Stop Loss
+            # Initial Stop Loss (5-candle structure + 0.5x ATR cushion)
             if trade['type'] == 'LONG':
-                sl_initial = hvn_price - (self.config.SL_ATR_CUSHION * atr)
-                sl_initial = min(sl_initial, entry_price - ((self.config.SL_ATR_CUSHION + 0.5) * atr))
+                local_swing_low = float(recent_5['low'].min())
+                entry_candle_low = float(df.loc[entry_idx, 'low'])
+                structural_low = min(local_swing_low, entry_candle_low)
+                sl_initial = structural_low - (0.5 * atr)
+                sl_initial = max(sl_initial, 0.01)
             else:
-                sl_initial = hvn_price + (self.config.SL_ATR_CUSHION * atr)
-                sl_initial = max(sl_initial, entry_price + ((self.config.SL_ATR_CUSHION + 0.5) * atr))
-            sl_initial = max(sl_initial, 0.01)
+                local_swing_high = float(recent_5['high'].max())
+                entry_candle_high = float(df.loc[entry_idx, 'high'])
+                structural_high = max(local_swing_high, entry_candle_high)
+                sl_initial = structural_high + (0.5 * atr)
             
             # Initial Take Profit
             initial_risk = abs(entry_price - sl_initial)
@@ -531,6 +540,9 @@ class TalksyBot:
                 'timestamp': 'first'
             }).dropna()
             
+            if resampled.empty:
+                return {}
+                
             # Floor timestamp to start of hour in UTC milliseconds
             resampled['timestamp'] = (resampled['timestamp'].astype(int) // 3600000) * 3600000
             
@@ -1040,12 +1052,13 @@ class TalksyBot:
                                     self.entry_prices[ticker] = current_price
                                     self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
                                     
-                                    # Pillar 1: Dynamic Volume Anchor (HVN over last 3 candles)
-                                    recent_3 = df_with_scores.iloc[-3:]
-                                    hvn_idx = recent_3['volume'].idxmax()
-                                    hvn_price = float(recent_3.loc[hvn_idx, 'close'])
-                                    self.exit_sls[ticker] = hvn_price - (self.config.SL_ATR_CUSHION * current_atr)
-                                    self.exit_sls[ticker] = min(self.exit_sls[ticker], self.entry_prices[ticker] - ((self.config.SL_ATR_CUSHION + 0.5) * current_atr))
+                                    # ATR-Padded Swing Low Stop Loss (5-candle structure + 0.5x ATR cushion)
+                                    recent_5 = df_with_scores.iloc[-5:]
+                                    local_swing_low = float(recent_5['low'].min())
+                                    entry_candle_low = float(closed_row['low'])
+                                    structural_low = min(local_swing_low, entry_candle_low)
+                                    
+                                    self.exit_sls[ticker] = structural_low - (0.5 * current_atr)
                                     self.exit_sls[ticker] = max(self.exit_sls[ticker], 0.01)
                                     
                                     # Dynamic position sizing
@@ -1115,13 +1128,13 @@ class TalksyBot:
                                     self.entry_prices[ticker] = current_price
                                     self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
                                     
-                                    # Pillar 1: Dynamic Volume Anchor (HVN over last 3 candles)
-                                    recent_3 = df_with_scores.iloc[-3:]
-                                    hvn_idx = recent_3['volume'].idxmax()
-                                    hvn_price = float(recent_3.loc[hvn_idx, 'close'])
+                                    # ATR-Padded Swing High Stop Loss (5-candle structure + 0.5x ATR cushion)
+                                    recent_5 = df_with_scores.iloc[-5:]
+                                    local_swing_high = float(recent_5['high'].max())
+                                    entry_candle_high = float(closed_row['high'])
+                                    structural_high = max(local_swing_high, entry_candle_high)
                                     
-                                    self.exit_sls[ticker] = hvn_price + (self.config.SL_ATR_CUSHION * current_atr)
-                                    self.exit_sls[ticker] = max(self.exit_sls[ticker], self.entry_prices[ticker] + ((self.config.SL_ATR_CUSHION + 0.5) * current_atr))
+                                    self.exit_sls[ticker] = structural_high + (0.5 * current_atr)
                                     
                                     # Dynamic position sizing
                                     self.contracts[ticker] = self.calculate_volatility_position_size(ticker, self.entry_prices[ticker], self.exit_sls[ticker])

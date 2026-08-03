@@ -153,12 +153,26 @@ def build_ml_state_payload(bot):
         'audit_logs': getattr(bot, 'ml_veto_logs', [])[-20:]
     }
 
+DEFAULT_PRICES = {
+    "BTC/USDT": 60000.0,
+    "ETH/USDT": 3000.0,
+    "SOL/USDT": 135.0,
+    "BNB/USDT": 540.0,
+    "LINK/USDT": 13.0
+}
+
+def get_default_price_for_symbol(symbol: str) -> float:
+    return DEFAULT_PRICES.get(symbol, 100.0)
+
 def get_global_states(bot) -> dict:
     """Helper returning a snapshot of status, pricing, and sentiment details for all tickers."""
     global_states = {}
+    if not bot:
+        return global_states
     for t in bot.tickers:
         t_payload = bot.last_payloads.get(t)
         sentiment = bot.sentiment_cache.get(t, {'bull_pct': 50, 'bear_pct': 50})
+        def_price = get_default_price_for_symbol(t)
         if t_payload:
             global_states[t] = {
                 'state': t_payload['state'],
@@ -166,18 +180,18 @@ def get_global_states(bot) -> dict:
                 'entry_price': float(t_payload['entry_price']) if t_payload.get('entry_price') is not None else None,
                 'exit_sl': float(t_payload['exit_sl']) if t_payload.get('exit_sl') is not None else None,
                 'exit_tp': float(t_payload['exit_tp']) if t_payload.get('exit_tp') is not None else None,
-                'current_price': float(t_payload['current_price']) if t_payload.get('current_price') is not None else 60000.0,
+                'current_price': float(t_payload['current_price']) if t_payload.get('current_price') is not None else def_price,
                 'bull_pct': int(t_payload.get('bull_pct', sentiment['bull_pct'])),
                 'bear_pct': int(t_payload.get('bear_pct', sentiment['bear_pct'])),
             }
         else:
             global_states[t] = {
-                'state': bot.states[t],
+                'state': bot.states.get(t, "IDLE"),
                 'position_size': float(bot.contracts.get(t, 0.0)) if bot.contracts.get(t) is not None else 0.0,
                 'entry_price': float(bot.entry_prices.get(t)) if bot.entry_prices.get(t) is not None else None,
                 'exit_sl': float(bot.exit_sls.get(t)) if bot.exit_sls.get(t) is not None else None,
                 'exit_tp': float(bot.exit_tps.get(t)) if bot.exit_tps.get(t) is not None else None,
-                'current_price': 60000.0,
+                'current_price': def_price,
                 'bull_pct': sentiment['bull_pct'],
                 'bear_pct': sentiment['bear_pct'],
             }
@@ -198,17 +212,17 @@ async def websocket_endpoint(websocket: WebSocket):
                 active_payload = {
                     'ticker': selected_symbol,
                     'timeframe': bot.config.TIMEFRAME_PRIMARY,
-                    'state': bot.states[selected_symbol],
-                    'entry_price': bot.entry_prices[selected_symbol],
-                    'exit_sl': bot.exit_sls[selected_symbol],
-                    'exit_tp': bot.exit_tps[selected_symbol],
-                    'current_price': 60000.0,
-                    'candle_close_count_wrong_side': bot.candle_close_count_wrong_side[selected_symbol],
+                    'state': bot.states.get(selected_symbol, "IDLE"),
+                    'entry_price': bot.entry_prices.get(selected_symbol),
+                    'exit_sl': bot.exit_sls.get(selected_symbol),
+                    'exit_tp': bot.exit_tps.get(selected_symbol),
+                    'current_price': get_default_price_for_symbol(selected_symbol),
+                    'candle_close_count_wrong_side': bot.candle_close_count_wrong_side.get(selected_symbol, 0),
                     'bull_pct': 50,
                     'bear_pct': 50,
                     'balance': bot.balance,
                     'portfolio_val': bot.balance,
-                    'contracts': bot.contracts[selected_symbol],
+                    'contracts': bot.contracts.get(selected_symbol, 0.0),
                     'indicators': {},
                     'trade_ledger': bot.trade_ledger,
                     'order_book': None,

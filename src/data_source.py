@@ -237,30 +237,34 @@ class DataSourceManager:
         """Fetches active bid/ask order book snapshot from CCXT or generates simulated book."""
         ccxt_symbol = self.tickers_ccxt.get(ticker, ticker)
         if self.simulation_mode or not self.exchange:
-            cache_file = self.cache_files[ticker]
             last_price = 60000.0
-            if os.path.exists(cache_file):
-                try:
-                    df = pd.read_csv(cache_file)
-                    if not df.empty:
-                        last_price = float(df['close'].iloc[-1])
-                except Exception:
-                    pass
+            if ticker in self.sim_candles and len(self.sim_candles[ticker]) > 0:
+                last_price = float(self.sim_candles[ticker][-1][4])
+            else:
+                cache_file = self.cache_files.get(ticker, "")
+                if os.path.exists(cache_file):
+                    try:
+                        df = pd.read_csv(cache_file)
+                        if not df.empty:
+                            last_price = float(df['close'].iloc[-1])
+                    except Exception:
+                        pass
                     
+            step = max(0.01, last_price * 0.0001)
             bids = []
             asks = []
             for i in range(1, limit + 1):
-                bids.append([last_price - (i * 0.5), random.uniform(0.1, 2.5)])
-                asks.append([last_price + (i * 0.5), random.uniform(0.1, 2.5)])
+                bids.append([last_price - (i * step), random.uniform(0.1, 2.5)])
+                asks.append([last_price + (i * step), random.uniform(0.1, 2.5)])
             return {'bids': bids, 'asks': asks}
         
         try:
             return self.exchange.fetch_order_book(ccxt_symbol, limit=limit)
         except Exception as e:
             print(f"[WARN] Failed to fetch order book for {ticker} from CCXT: {e}. Falling back to simulated book.")
-            # Fallback to simulated book around last cached price
-            cache_file = self.cache_files[ticker]
+            # Fallback to simulated book around last price
             last_price = 60000.0
+            cache_file = self.cache_files.get(ticker, "")
             if os.path.exists(cache_file):
                 try:
                     df = pd.read_csv(cache_file)
@@ -268,11 +272,12 @@ class DataSourceManager:
                         last_price = float(df['close'].iloc[-1])
                 except Exception:
                     pass
+            step = max(0.01, last_price * 0.0001)
             bids = []
             asks = []
             for i in range(1, limit + 1):
-                bids.append([last_price - (i * 0.5), random.uniform(0.1, 1.5)])
-                asks.append([last_price + (i * 0.5), random.uniform(0.1, 1.5)])
+                bids.append([last_price - (i * step), random.uniform(0.1, 1.5)])
+                asks.append([last_price + (i * step), random.uniform(0.1, 1.5)])
             return {'bids': bids, 'asks': asks}
 
     async def fetch_order_book(self, ticker: str, limit: int = 5) -> dict:

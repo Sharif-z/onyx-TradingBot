@@ -61,10 +61,10 @@ class Dashboard:
                 # Calculate individual position unclosed PnL
                 if t_state == "LONG" and t_entry and t_contracts:
                     t_pnl = t_contracts * (t_price - t_entry)
-                    t_pnl_pct = (t_pnl / (t_entry * t_contracts) * 100.0) if t_entry > 0 else 0.0
+                    t_pnl_pct = (t_pnl / (t_entry * t_contracts) * 100.0) if (t_entry and t_contracts and (t_entry * t_contracts != 0)) else 0.0
                 elif t_state == "SHORT" and t_entry and t_contracts:
                     t_pnl = t_contracts * (t_entry - t_price)
-                    t_pnl_pct = (t_pnl / (t_entry * t_contracts) * 100.0) if t_entry > 0 else 0.0
+                    t_pnl_pct = (t_pnl / (t_entry * t_contracts) * 100.0) if (t_entry and t_contracts and (t_entry * t_contracts != 0)) else 0.0
                 else:
                     t_pnl = 0.0
                     t_pnl_pct = 0.0

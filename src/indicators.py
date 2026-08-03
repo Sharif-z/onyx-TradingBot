@@ -26,6 +26,8 @@ def convert_to_heikin_ashi(df: pd.DataFrame) -> pd.DataFrame:
     HA_Low = min(Low, HA_Open, HA_Close)
     """
     ha_df = df.copy()
+    if df.empty:
+        return ha_df
     
     # Calculate HA_Close first (fully vectorized)
     ha_close = (df['open'] + df['high'] + df['low'] + df['close']) / 4.0
@@ -420,7 +422,8 @@ def calculate_predicta_scores(df: pd.DataFrame) -> pd.DataFrame:
     # Safe division to prevent Division by Zero
     final_bull = np.where(sum_scores > 0, (long_score / sum_scores) * 100.0, 50.0)
     
-    df['final_bull_percentage'] = np.round(final_bull).astype(int)
+    final_bull_clean = pd.Series(final_bull, index=df.index).fillna(50.0)
+    df['final_bull_percentage'] = np.round(final_bull_clean).astype(int)
     df['final_bear_percentage'] = 100 - df['final_bull_percentage']
     
     return df

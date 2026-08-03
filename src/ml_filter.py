@@ -93,18 +93,23 @@ class MLFilter:
             rsi_slope3 = float(active_row['rsi_slope3']) if 'rsi_slope3' in active_row and not pd.isna(active_row['rsi_slope3']) else 0.0
             adx_slope3 = float(active_row['adx_slope3']) if 'adx_slope3' in active_row and not pd.isna(active_row['adx_slope3']) else 0.0
             
+            ema9_val = float(active_row['ema9']) if 'ema9' in active_row and not pd.isna(active_row['ema9']) else entry_price
+            ema21_val = float(active_row['ema21']) if 'ema21' in active_row and not pd.isna(active_row['ema21']) else entry_price
+            trend_val = float(active_row['trend_baseline']) if 'trend_baseline' in active_row and not pd.isna(active_row['trend_baseline']) else entry_price
+            macro_val = float(active_row['macro_baseline']) if 'macro_baseline' in active_row and not pd.isna(active_row['macro_baseline']) else entry_price
+            
             features = {
-                'risk_dist_pct': (1.5 * atr / entry_price) * 100.0,
-                'ema9_ema21_diff_pct': ((float(active_row['ema9']) - float(active_row['ema21'])) / float(active_row['ema21'])) * 100.0,
-                'close_ema9_diff_pct': ((entry_price - float(active_row['ema9'])) / float(active_row['ema9'])) * 100.0,
-                'hma200_dist_pct': ((entry_price - float(active_row['trend_baseline'])) / float(active_row['trend_baseline'])) * 100.0,
-                'hma800_dist_pct': ((entry_price - float(active_row['macro_baseline'])) / float(active_row['macro_baseline'])) * 100.0,
-                'hma200_slope_pct': ((float(active_row['trend_baseline']) - prev_trend) / (prev_trend + 1e-8)) * 100.0,
+                'risk_dist_pct': (1.5 * atr / (entry_price + 1e-8)) * 100.0,
+                'ema9_ema21_diff_pct': ((ema9_val - ema21_val) / (ema21_val + 1e-8)) * 100.0,
+                'close_ema9_diff_pct': ((entry_price - ema9_val) / (ema9_val + 1e-8)) * 100.0,
+                'hma200_dist_pct': ((entry_price - trend_val) / (trend_val + 1e-8)) * 100.0,
+                'hma800_dist_pct': ((entry_price - macro_val) / (macro_val + 1e-8)) * 100.0,
+                'hma200_slope_pct': ((trend_val - prev_trend) / (prev_trend + 1e-8)) * 100.0,
                 'rsi': rsi,
                 'rsi_slope3': rsi_slope3,
                 'adx': adx,
                 'adx_slope3': adx_slope3,
-                'atr_pct': (atr / entry_price) * 100.0,
+                'atr_pct': (atr / (entry_price + 1e-8)) * 100.0,
                 'atr_squeeze_ratio': atr / (atr_sma100 + 1e-8),
                 'vol_ratio': float(active_row['volume']) / (vol_sma20 + 1e-8),
                 'vol_surge_ratio': float(active_row['volume']) / (vol_max20 + 1e-8),
@@ -133,9 +138,11 @@ class MLFilter:
             # Quantize features into bin indices
             binned_vector = []
             for col in self.feature_cols:
-                val = float(features.get(col, 0.0))
+                raw_val = features.get(col, 0.0)
+                val = float(raw_val) if raw_val is not None and not pd.isna(raw_val) else 0.0
                 edges = np.array(self.bin_edges.get(col, [0.0, 1.0]))
                 bin_idx = int(np.digitize([val], edges)[0] - 1)
+                bin_idx = max(0, min(bin_idx, len(edges) - 2))
                 binned_vector.append(bin_idx)
                 
             n_samples = 1

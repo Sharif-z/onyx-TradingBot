@@ -972,191 +972,104 @@ class TalksyBot:
                         if self.states[ticker] != "IDLE":
                             self._save_bot_state()
         
-                    # 3. Check Entries (if IDLE)
+                    # 3. Check Entries (if IDLE) - ONYX V3 LINEAR EXECUTION & TELEMETRY PIPELINE
                     elif self.states[ticker] == "IDLE" and active_row['timestamp'] != self.last_exit_candle_times[ticker]:
-                        if not pd.isna(active_row['adx']):
-                            if active_row['adx'] > 15.0:
-                                current_atr = active_row['atr']
+                        current_atr = active_row['atr'] if 'atr' in active_row and not pd.isna(active_row['atr']) else current_price * 0.015
+                        prev_row = df_with_scores.iloc[-2] if len(df_with_scores) >= 2 else active_row
+                        
+                        # STEP 1 & 2: Determine base direction & evaluate ML Gatekeeper
+                        eval_side = "LONG" if active_row.get('ema9', 0) > active_row.get('ema21', 0) else "SHORT"
+                        
+                        ml_eval = {
+                            'approved': True, 
+                            'p_win': 0.51, 
+                            'p_safe': 0.51,
+                            'tier_level': 1, 
+                            'multiplier': 1.0, 
+                            'reason': '[ML_GATE] Model disabled — Allowed default'
+                        }
+                        if getattr(self.config, 'USE_ML_GATEKEEPER', False) and self.ml_filter.is_loaded:
+                            ml_eval = self.ml_filter.evaluate_tier(
+                                active_row=active_row,
+                                prev_row=prev_row,
+                                side=eval_side,
+                                tier1_cutoff=getattr(self.config, 'ML_TIER1_THRESHOLD', 0.51),
+                                tier2_cutoff=getattr(self.config, 'ML_TIER2_THRESHOLD', 0.53)
+                            )
+                        
+                        # Contextual UI Telemetry Keys for Dashboard Feed
+                        ml_eval['ticker'] = ticker
+                        ml_eval['signal'] = eval_side
+                        ml_eval['timestamp'] = current_time.strftime("%H:%M:%S")
+                        ml_eval['price'] = current_price
+                        ml_eval['p_win'] = round(float(ml_eval.get('p_win', 0.51)), 4)
+                        ml_eval['p_safe'] = round(float(ml_eval.get('p_win', 0.51)), 4)
+                        ml_eval['dry_run'] = getattr(self.config, 'ML_DRY_RUN', False)
+                            
+                        # STEP 3: ML Probability Score Check (< 51.0% VETO)
+                        if getattr(self.config, 'USE_ML_GATEKEEPER', False) and not ml_eval['approved']:
+                            self.ml_veto_count += 1
+                            risk_amt = (self.config.TOTAL_CAPITAL * (self.config.MAX_RISK_PCT / 100.0))
+                            self.ml_saved_capital += risk_amt
+                            ml_eval['status'] = 'VETOED'
+                            self.ml_veto_logs.append(ml_eval)
+                            self.ml_veto_logs = self.ml_veto_logs[-50:]
+                        else:
+                            if getattr(self.config, 'USE_ML_GATEKEEPER', False):
+                                self.ml_approved_count += 1
                                 
-                                min_gate = self.config.SENTIMENT_GATES.get(ticker, 65.0)
+                            # STEP 4: Portfolio Heat Cap Budget Check (12.0%)
+                            current_heat = self.get_total_portfolio_heat() if hasattr(self, 'get_total_portfolio_heat') else 0.0
+                            max_heat = getattr(self.config, 'MAX_PORTFOLIO_HEAT_PCT', 12.0)
+                            
+                            if current_heat >= max_heat:
+                                print(f"[HEAT CAP VETO] {ticker} Heat {current_heat:.1f}% >= Max {max_heat:.1f}%. Entry blocked.")
+                                ml_eval['status'] = 'HEAT VETOED'
+                                ml_eval['approved'] = False
+                                self.ml_veto_logs.append(ml_eval)
+                                self.ml_veto_logs = self.ml_veto_logs[-50:]
+                            else:
+                                # Determine Tier & Signal Inversion (Fade Mode)
+                                is_fade = (ml_eval.get('tier_level', 1) == 2) and getattr(self.config, 'FADE_MODE', True)
+                                final_side = ("SHORT" if eval_side == "LONG" else "LONG") if is_fade else eval_side
+                                size_multiplier = 5.0 if is_fade else 1.0
                                 
-                                # Long Entry Criteria
-                                long_trigger = (
-                                    (not pd.isna(active_row['adx'])) and (active_row['adx'] > 15.0) and
-                                    (active_row['ema9'] > active_row['ema21']) and
-                                    (active_row['ha_low'] <= active_row['ema9']) and
-                                    (active_row['ha_close'] > active_row['ema9']) and
-                                    (active_row['ha_close'] > active_row['trend_baseline']) and
-                                    (self.config.USE_MACRO_TREND_FILTER is False or active_row['ha_close'] > active_row['macro_baseline']) and
-                                    (closed_row['volume'] > closed_row['vol_sma20']) and
-                                    (closed_row['close'] > closed_row['open']) and
-                                    (bull_pct >= min_gate)
-                                )
+                                # Set UI Status Badge
+                                if is_fade:
+                                    ml_eval['status'] = 'TIER 2 FADE (5X)'
+                                else:
+                                    ml_eval['status'] = 'TIER 1 (1X)'
+                                    
+                                self.ml_veto_logs.append(ml_eval)
+                                self.ml_veto_logs = self.ml_veto_logs[-50:]
                                 
-                                # Short Entry Criteria
-                                short_trigger = (
-                                    (not pd.isna(active_row['adx'])) and (active_row['adx'] > 15.0) and
-                                    (active_row['ema9'] < active_row['ema21']) and
-                                    (active_row['ha_high'] >= active_row['ema9']) and
-                                    (active_row['ha_close'] < active_row['ema9']) and
-                                    (active_row['ha_close'] < active_row['trend_baseline']) and
-                                    (self.config.USE_MACRO_TREND_FILTER is False or active_row['ha_close'] < active_row['macro_baseline']) and
-                                    (closed_row['volume'] > closed_row['vol_sma20']) and
-                                    (closed_row['close'] < closed_row['open']) and
-                                    (bear_pct >= min_gate)
-                                )
+                                self.states[ticker] = final_side
+                                self.entry_prices[ticker] = current_price
+                                self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
                                 
-                                if long_trigger:
-                                    if getattr(self.config, 'USE_ML_GATEKEEPER', False) and self.ml_filter.is_loaded:
-                                        prev_row = df_with_scores.iloc[-2] if len(df_with_scores) >= 2 else active_row
-                                        ml_eval = self.ml_filter.evaluate(
-                                            active_row=active_row,
-                                            prev_row=prev_row,
-                                            side="LONG",
-                                            dry_run=getattr(self.config, 'ML_DRY_RUN', True),
-                                            custom_threshold=getattr(self.config, 'ML_CONFIDENCE_THRESHOLD', 0.65)
-                                        )
-                                        ml_eval['ticker'] = ticker
-                                        ml_eval['signal'] = "LONG"
-                                        ml_eval['timestamp'] = current_time.strftime("%H:%M:%S")
-                                        ml_eval['price'] = current_price
-                                        if ml_eval['approved']:
-                                            self.ml_approved_count += 1
-                                        else:
-                                            self.ml_veto_count += 1
-                                            risk_amt = (self.config.TOTAL_CAPITAL * (self.config.MAX_RISK_PCT / 100.0))
-                                            self.ml_saved_capital += risk_amt
-                                        self.ml_veto_logs.append(ml_eval)
-                                        print(f"[ML_GATE] {ticker} {ml_eval['reason']}")
-                                        if not ml_eval['approved']:
-                                            long_trigger = False
-                                            
-                                if long_trigger:
-                                    # Order Book Imbalance Veto Guard (Liquidity Confirmation)
-                                    imbalance = 0.0
-                                    if order_book and 'bids' in order_book and 'asks' in order_book:
-                                        bids = order_book['bids']
-                                        asks = order_book['asks']
-                                        if bids and asks:
-                                            total_bids = sum(b[1] for b in bids[:3])
-                                            total_asks = sum(a[1] for a in asks[:3])
-                                            sum_vol = total_bids + total_asks
-                                            imbalance = ((total_bids - total_asks) / sum_vol * 100.0) if sum_vol > 0 else 0.0
-                                    
-                                    if imbalance < 10.0:
-                                        print(f"[VETO] LONG trade entry vetoed for {ticker}. Imbalance {imbalance:+.1f}% is below +10% threshold (Sell Wall detected).")
-                                        long_trigger = False
+                                # ATR-based Stop Loss & Take Profit
+                                sl_dist = 1.2 * current_atr if is_fade else 1.5 * current_atr
+                                tp_dist = 1.0 * sl_dist if is_fade else self.config.RISK_REWARD_RATIO * sl_dist
                                 
-                                if long_trigger:
-                                    self.states[ticker] = "LONG"
-                                    self.entry_prices[ticker] = current_price
-                                    self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
+                                if final_side == "LONG":
+                                    self.exit_sls[ticker] = max(0.01, current_price - sl_dist)
+                                    self.exit_tps[ticker] = current_price + tp_dist
+                                else:
+                                    self.exit_sls[ticker] = current_price + sl_dist
+                                    self.exit_tps[ticker] = max(0.01, current_price - tp_dist)
                                     
-                                    # ATR-Padded Swing Low Stop Loss (5-candle structure + 0.5x ATR cushion)
-                                    recent_5 = df_with_scores.iloc[-5:]
-                                    local_swing_low = float(recent_5['low'].min())
-                                    entry_candle_low = float(closed_row['low'])
-                                    structural_low = min(local_swing_low, entry_candle_low)
-                                    
-                                    self.exit_sls[ticker] = structural_low - (0.5 * current_atr)
-                                    self.exit_sls[ticker] = max(self.exit_sls[ticker], 0.01)
-                                    
-                                    # Dynamic position sizing
-                                    self.contracts[ticker] = self.calculate_volatility_position_size(ticker, self.entry_prices[ticker], self.exit_sls[ticker])
-                                    
-                                    self.initial_risks[ticker] = abs(self.entry_prices[ticker] - self.exit_sls[ticker])
-                                    
-                                    # Dynamic Take Profit scale based on Predicta sentiment
-                                    tp_multiplier = self.config.RISK_REWARD_RATIO
-                                    if bull_pct >= 80:
-                                        tp_multiplier = 2.5
-                                    elif bull_pct >= 70:
-                                        tp_multiplier = 2.0
-                                    
-                                    print(f"[*] Dynamic TP scale [{ticker}] -> Bullish Sentiment: {bull_pct}% | TP Multiplier: {tp_multiplier}x")
-                                    self.exit_tps[ticker] = self.entry_prices[ticker] + (self.initial_risks[ticker] * tp_multiplier)
-                                    self.candle_close_count_wrong_side[ticker] = 0
-                                    self.last_closed_candle_times[ticker] = closed_row['timestamp']
-                                    
-                                    self.low_sentiment_ticks[ticker] = 0
-                                    self.breakeven_locked[ticker] = False
-                                    self._save_bot_state()
-                                    
-                                elif short_trigger:
-                                    if getattr(self.config, 'USE_ML_GATEKEEPER', False) and self.ml_filter.is_loaded:
-                                        prev_row = df_with_scores.iloc[-2] if len(df_with_scores) >= 2 else active_row
-                                        ml_eval = self.ml_filter.evaluate(
-                                            active_row=active_row,
-                                            prev_row=prev_row,
-                                            side="SHORT",
-                                            dry_run=getattr(self.config, 'ML_DRY_RUN', True),
-                                            custom_threshold=getattr(self.config, 'ML_CONFIDENCE_THRESHOLD', 0.65)
-                                        )
-                                        ml_eval['ticker'] = ticker
-                                        ml_eval['signal'] = "SHORT"
-                                        ml_eval['timestamp'] = current_time.strftime("%H:%M:%S")
-                                        ml_eval['price'] = current_price
-                                        if ml_eval['approved']:
-                                            self.ml_approved_count += 1
-                                        else:
-                                            self.ml_veto_count += 1
-                                            risk_amt = (self.config.TOTAL_CAPITAL * (self.config.MAX_RISK_PCT / 100.0))
-                                            self.ml_saved_capital += risk_amt
-                                        self.ml_veto_logs.append(ml_eval)
-                                        print(f"[ML_GATE] {ticker} {ml_eval['reason']}")
-                                        if not ml_eval['approved']:
-                                            short_trigger = False
-                                            
-                                if short_trigger:
-                                    # Order Book Imbalance Veto Guard (Liquidity Confirmation)
-                                    imbalance = 0.0
-                                    if order_book and 'bids' in order_book and 'asks' in order_book:
-                                        bids = order_book['bids']
-                                        asks = order_book['asks']
-                                        if bids and asks:
-                                            total_bids = sum(b[1] for b in bids[:3])
-                                            total_asks = sum(a[1] for a in asks[:3])
-                                            sum_vol = total_bids + total_asks
-                                            imbalance = ((total_bids - total_asks) / sum_vol * 100.0) if sum_vol > 0 else 0.0
-                                    
-                                    if imbalance > -10.0:
-                                        print(f"[VETO] SHORT trade entry vetoed for {ticker}. Imbalance {imbalance:+.1f}% is above -10% threshold (Buy Wall detected).")
-                                        short_trigger = False
+                                base_contracts = self.calculate_volatility_position_size(ticker, self.entry_prices[ticker], self.exit_sls[ticker])
+                                self.contracts[ticker] = base_contracts * size_multiplier
+                                self.initial_risks[ticker] = abs(self.entry_prices[ticker] - self.exit_sls[ticker])
                                 
-                                if short_trigger:
-                                    self.states[ticker] = "SHORT"
-                                    self.entry_prices[ticker] = current_price
-                                    self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
-                                    
-                                    # ATR-Padded Swing High Stop Loss (5-candle structure + 0.5x ATR cushion)
-                                    recent_5 = df_with_scores.iloc[-5:]
-                                    local_swing_high = float(recent_5['high'].max())
-                                    entry_candle_high = float(closed_row['high'])
-                                    structural_high = max(local_swing_high, entry_candle_high)
-                                    
-                                    self.exit_sls[ticker] = structural_high + (0.5 * current_atr)
-                                    
-                                    # Dynamic position sizing
-                                    self.contracts[ticker] = self.calculate_volatility_position_size(ticker, self.entry_prices[ticker], self.exit_sls[ticker])
-                                    
-                                    self.initial_risks[ticker] = abs(self.exit_sls[ticker] - self.entry_prices[ticker])
-                                    
-                                    # Dynamic Take Profit scale based on Predicta sentiment
-                                    tp_multiplier = self.config.RISK_REWARD_RATIO
-                                    if bear_pct >= 80:
-                                        tp_multiplier = 2.5
-                                    elif bear_pct >= 70:
-                                        tp_multiplier = 2.0
-                                    
-                                    print(f"[*] Dynamic TP scale [{ticker}] -> Bearish Sentiment: {bear_pct}% | TP Multiplier: {tp_multiplier}x")
-                                    self.exit_tps[ticker] = self.entry_prices[ticker] - (self.initial_risks[ticker] * tp_multiplier)
-                                    self.exit_tps[ticker] = max(self.exit_tps[ticker], 0.01)
-                                    self.candle_close_count_wrong_side[ticker] = 0
-                                    self.last_closed_candle_times[ticker] = closed_row['timestamp']
-                                    
-                                    self.low_sentiment_ticks[ticker] = 0
-                                    self.breakeven_locked[ticker] = False
-                                    self._save_bot_state()
+                                self.candle_close_count_wrong_side[ticker] = 0
+                                self.last_closed_candle_times[ticker] = closed_row['timestamp']
+                                self.low_sentiment_ticks[ticker] = 0
+                                self.breakeven_locked[ticker] = False
+                                self._save_bot_state()
+                                
+                                tier_str = "🔥 TIER 2 SNIPER FADE (5X)" if is_fade else "🟢 TIER 1 STANDARD (1X)"
+                                print(f"[{tier_str}] {ticker} {final_side} @ ${current_price:.2f} | Score: {ml_eval.get('p_win', 0.51)*100:.1f}% | SL: ${self.exit_sls[ticker]:.2f} | TP: ${self.exit_tps[ticker]:.2f}")
                     
                     sess_status, sess_countdown = self.get_session_status_and_countdown(active_row['timestamp'] if self.simulation_mode else None)
                     

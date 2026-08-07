@@ -73,9 +73,13 @@ class TalksyConfig:
     SIMULATION_TICK_SECS = 0.5  # Accelerated ticking for test runs
     
     # Machine Learning Gatekeeper Settings
-    USE_ML_GATEKEEPER = True      # Enable ML probabilistic classifier filter
-    ML_DRY_RUN = False            # False: Actively block trades that fail ML confidence score
-    ML_CONFIDENCE_THRESHOLD = 0.65  # Minimum Safe Trade probability (P_Safe >= 65%)
+    USE_ML_GATEKEEPER = True        # Enable ML probabilistic classifier filter
+    ML_DRY_RUN = False              # False: Actively block trades that fail ML confidence score
+    ML_TIER1_THRESHOLD = 0.51       # Baseline threshold: 51.0% (Tier 1 Standard 1x)
+    ML_TIER2_THRESHOLD = 0.53       # Sniper threshold: 53.0% (Tier 2 Fade 5x)
+    FADE_MODE = True                # Enable Tier 2 Fade Mode
+    MAX_PORTFOLIO_HEAT_PCT = 12.0   # Total portfolio heat cap budget (12.0%)
+    USE_ORDERBOOK_IMBALANCE_VETO = False  # Disable orderbook depth guards per blueprint
     
     PROJECT_ROOT = os.path.dirname(os.path.abspath(__file__))
     CACHE_DIR = os.path.join(PROJECT_ROOT, "cache")

@@ -45,16 +45,18 @@ class MLFilter:
                 data = json.load(f)
                 self.trees = data.get("trees", [])
                 self.bin_edges = data.get("bin_edges", {})
-                self.feature_cols = data.get("feature_cols", [])
+                self.feature_cols = data.get("features", data.get("feature_cols", []))
                 
             if os.path.exists(self.features_path):
                 with open(self.features_path, "r") as f:
                     f_meta = json.load(f)
-                    self.threshold = f_meta.get("threshold", 0.65)
+                    self.threshold = f_meta.get("tier1_threshold", f_meta.get("threshold", 0.51))
+                    if not self.feature_cols:
+                        self.feature_cols = f_meta.get("feature_columns", [])
                     
             self.is_loaded = len(self.trees) > 0 and len(self.feature_cols) > 0
             if self.is_loaded:
-                print(f"[ML_FILTER SUCCESS] Loaded Onyx ML Gatekeeper ({len(self.trees)} trees, {len(self.feature_cols)} features, Threshold: {self.threshold*100:.0f}%).")
+                print(f"[ML_FILTER SUCCESS] Loaded Onyx ML Gatekeeper ({len(self.trees)} trees, {len(self.feature_cols)} features, Threshold: {self.threshold*100:.1f}%).")
         except Exception as e:
             print(f"[ML_FILTER ERROR] Failed to load ML model: {e}")
             self.is_loaded = False
@@ -145,8 +147,7 @@ class MLFilter:
                 bin_idx = max(0, min(bin_idx, len(edges) - 2))
                 binned_vector.append(bin_idx)
                 
-            n_samples = 1
-            all_probs = np.zeros(3, dtype=np.float32)
+            all_probs = np.zeros(2, dtype=np.float32)
             
             for tree in self.trees:
                 curr = tree
@@ -157,10 +158,18 @@ class MLFilter:
                         curr = curr['left']
                     else:
                         curr = curr['right']
-                all_probs += np.array(curr['probs'], dtype=np.float32)
+                        
+                probs_val = curr.get('probs', [0.5, 0.5])
+                if len(probs_val) >= 2:
+                    all_probs += np.array([probs_val[0], probs_val[-1]], dtype=np.float32)
+                else:
+                    all_probs += np.array([0.5, 0.5], dtype=np.float32)
                 
             all_probs /= len(self.trees)
-            p_loss, p_be, p_win = float(all_probs[0]), float(all_probs[1]), float(all_probs[2])
+            p_loss = float(all_probs[0])
+            p_win = float(all_probs[1])
+            p_be = 0.0
+            
             return p_loss, p_be, p_win
         except Exception as e:
             print(f"[ML_FILTER ERROR] Inference prediction failed: {e}")
@@ -213,3 +222,45 @@ class MLFilter:
             'dry_run': dry_run,
             'reason': reason
         }
+
+    def evaluate_tier(self, active_row: pd.Series, prev_row: pd.Series, side: str, tier1_cutoff: float = 0.51, tier2_cutoff: float = 0.53) -> dict:
+        """Evaluates live tick setup against dual-tier matrix thresholds (Tier 1 Standard vs Tier 2 Fade)."""
+        if not self.is_loaded:
+            return {
+                'approved': True,
+                'p_win': 0.51,
+                'p_safe': 0.51,
+                'tier_level': 1,
+                'multiplier': 1.0,
+                'reason': '[ML_GATE] Model not loaded — Default 1x'
+            }
+        feats = self.extract_live_features(active_row, prev_row, side)
+        p_loss, p_be, p_win = self.predict_safe_probability(feats)
+        
+        if p_win >= tier2_cutoff:
+            return {
+                'approved': True,
+                'p_win': round(p_win, 4),
+                'p_safe': round(p_win, 4),
+                'tier_level': 2,
+                'multiplier': 5.0,
+                'reason': f'[TIER 2 SNIPER] Score {p_win*100:.1f}% >= {tier2_cutoff*100:.1f}% (5x Fade)'
+            }
+        elif p_win >= tier1_cutoff:
+            return {
+                'approved': True,
+                'p_win': round(p_win, 4),
+                'p_safe': round(p_win, 4),
+                'tier_level': 1,
+                'multiplier': 1.0,
+                'reason': f'[TIER 1 STANDARD] Score {p_win*100:.1f}% >= {tier1_cutoff*100:.1f}% (1x Direct)'
+            }
+        else:
+            return {
+                'approved': False,
+                'p_win': round(p_win, 4),
+                'p_safe': round(p_win, 4),
+                'tier_level': 0,
+                'multiplier': 0.0,
+                'reason': f'[ML_VETO] Score {p_win*100:.1f}% < {tier1_cutoff*100:.1f}% cutoff'
+            }

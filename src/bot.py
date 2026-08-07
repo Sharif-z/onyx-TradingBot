@@ -45,6 +45,18 @@ class TalksyBot:
         self.ml_veto_count = 0
         self.ml_approved_count = 0
         
+        # ML Shadow Trading (Ghost Veto Engine)
+        self.ghost_trades = {t: None for t in self.tickers}
+        self.veto_correct_count = 0
+        self.veto_incorrect_count = 0
+        self.real_capital_saved = 0.0
+        
+        # Entry Audit Metadata Caching
+        self.entry_ml_scores = {t: None for t in self.tickers}
+        self.entry_ml_tiers = {t: None for t in self.tickers}
+        self.entry_sls = {t: None for t in self.tickers}
+        self.entry_tps = {t: None for t in self.tickers}
+        
         # Setup Ledger File and Cache Directory
         os.makedirs(os.path.dirname(self.config.LEDGER_FILE), exist_ok=True)
         os.makedirs(self.config.CACHE_DIR, exist_ok=True)
@@ -129,9 +141,14 @@ class TalksyBot:
                             'entry_price': float(row.get('entry_price', 0.0)),
                             'exit_price': float(row.get('exit_price', 0.0)),
                             'pnl': float(row.get('pnl', 0.0)),
+                            'pnl_pct': float(row.get('pnl_pct', 0.0)),
                             'cause': row.get('cause', ''),
                             'position_size': float(row.get('position_size', 0.0)),
-                            'balance': float(row.get('balance', 0.0))
+                            'balance': float(row.get('balance', 0.0)),
+                            'ml_score': row.get('ml_score', '51.0%'),
+                            'ml_tier': row.get('ml_tier', 'TIER 1 (1X)'),
+                            'initial_sl': float(row.get('initial_sl', 0.0)),
+                            'initial_tp': float(row.get('initial_tp', 0.0))
                         })
                 # Re-establish running balance based on last trade
                 if self.trade_ledger:
@@ -734,6 +751,45 @@ class TalksyBot:
                     current_price = active_row['close']
                     current_time = datetime.fromtimestamp(active_row['timestamp'] / 1000.0)
                     
+                    # 0. Track Active Ghost Veto Trades for Empirical Precision Audit
+                    ghost = self.ghost_trades.get(ticker)
+                    if ghost is not None:
+                        g_side = ghost['side']
+                        g_sl = ghost['sl']
+                        g_tp = ghost['tp']
+                        high_val = float(active_row['high'])
+                        low_val = float(active_row['low'])
+                        risk_amt = ghost.get('hypothetical_risk', 30.0)
+                        
+                        ghost_done = False
+                        if g_side == "LONG":
+                            if low_val <= g_sl:
+                                # Veto was CORRECT (prevented a loss!)
+                                self.veto_correct_count += 1
+                                self.real_capital_saved += risk_amt
+                                print(f"[GHOST VETO CORRECT] {ticker} LONG hit SL @ ${low_val:.2f} <= ${g_sl:.2f}. ML saved ${risk_amt:.2f} USD!")
+                                ghost_done = True
+                            elif high_val >= g_tp:
+                                # Veto was INCORRECT (blocked a win!)
+                                self.veto_incorrect_count += 1
+                                print(f"[GHOST VETO INCORRECT] {ticker} LONG hit TP @ ${high_val:.2f} >= ${g_tp:.2f}. ML blocked a winning trade.")
+                                ghost_done = True
+                        elif g_side == "SHORT":
+                            if high_val >= g_sl:
+                                # Veto was CORRECT (prevented a loss!)
+                                self.veto_correct_count += 1
+                                self.real_capital_saved += risk_amt
+                                print(f"[GHOST VETO CORRECT] {ticker} SHORT hit SL @ ${high_val:.2f} >= ${g_sl:.2f}. ML saved ${risk_amt:.2f} USD!")
+                                ghost_done = True
+                            elif low_val <= g_tp:
+                                # Veto was INCORRECT (blocked a win!)
+                                self.veto_incorrect_count += 1
+                                print(f"[GHOST VETO INCORRECT] {ticker} SHORT hit TP @ ${low_val:.2f} <= ${g_tp:.2f}. ML blocked a winning trade.")
+                                ghost_done = True
+                                
+                        if ghost_done:
+                            self.ghost_trades[ticker] = None
+                    
                     # Extract indicators for UI
                     indicators = {
                         'ha_close': float(active_row['ha_close']),
@@ -854,20 +910,20 @@ class TalksyBot:
                         
                         if not exit_triggered:
                             if ticker_state == "LONG":
-                                if low_val <= self.exit_sls[ticker]:
+                                if self.exit_sls[ticker] is not None and low_val <= self.exit_sls[ticker]:
                                     exit_triggered = True
                                     exit_price = self.exit_sls[ticker]
                                     cause = "Stop Loss (SL)"
-                                elif high_val >= self.exit_tps[ticker]:
+                                elif self.exit_tps[ticker] is not None and high_val >= self.exit_tps[ticker]:
                                     exit_triggered = True
                                     exit_price = self.exit_tps[ticker]
                                     cause = "Take Profit (TP)"
                             elif ticker_state == "SHORT":
-                                if high_val >= self.exit_sls[ticker]:
+                                if self.exit_sls[ticker] is not None and high_val >= self.exit_sls[ticker]:
                                     exit_triggered = True
                                     exit_price = self.exit_sls[ticker]
                                     cause = "Stop Loss (SL)"
-                                elif low_val <= self.exit_tps[ticker]:
+                                elif self.exit_tps[ticker] is not None and low_val <= self.exit_tps[ticker]:
                                     exit_triggered = True
                                     exit_price = self.exit_tps[ticker]
                                     cause = "Take Profit (TP)"
@@ -941,6 +997,13 @@ class TalksyBot:
                             except Exception:
                                 pass
                             
+                            ml_score_val = self.entry_ml_scores.get(ticker)
+                            ml_tier_val = self.entry_ml_tiers.get(ticker)
+                            initial_sl_val = self.entry_sls.get(ticker)
+                            initial_tp_val = self.entry_tps.get(ticker)
+                            
+                            pnl_pct = (pnl_dollar / (self.contracts[ticker] * self.entry_prices[ticker])) * 100.0 if (self.contracts[ticker] * self.entry_prices[ticker]) > 0 else 0.0
+                            
                             trade_record = {
                                 'entry_time': self.entry_times[ticker],
                                 'exit_time': exit_time_str,
@@ -951,9 +1014,14 @@ class TalksyBot:
                                 'entry_price': self.entry_prices[ticker],
                                 'exit_price': exit_price,
                                 'pnl': pnl_dollar,
+                                'pnl_pct': round(pnl_pct, 2),
                                 'cause': cause,
                                 'position_size': self.contracts[ticker],
-                                'balance': self.balance
+                                'balance': self.balance,
+                                'ml_score': f"{ml_score_val:.1f}%" if ml_score_val is not None else "51.0%",
+                                'ml_tier': ml_tier_val if ml_tier_val else "TIER 1 (1X)",
+                                'initial_sl': round(initial_sl_val, 2) if initial_sl_val is not None else round(self.exit_sls[ticker] or 0.0, 2),
+                                'initial_tp': round(initial_tp_val, 2) if initial_tp_val is not None else round(self.exit_tps[ticker] or 0.0, 2)
                             }
                             
                             self.trade_ledger.append(trade_record)
@@ -1009,11 +1077,26 @@ class TalksyBot:
                         # STEP 3: ML Probability Score Check (< 51.0% VETO)
                         if getattr(self.config, 'USE_ML_GATEKEEPER', False) and not ml_eval['approved']:
                             self.ml_veto_count += 1
-                            risk_amt = (self.config.TOTAL_CAPITAL * (self.config.MAX_RISK_PCT / 100.0))
-                            self.ml_saved_capital += risk_amt
-                            ml_eval['status'] = 'VETOED'
+                            ml_eval['status'] = 'GHOST VETOED'
                             self.ml_veto_logs.append(ml_eval)
                             self.ml_veto_logs = self.ml_veto_logs[-50:]
+                            
+                            # Initialize Shadow (Ghost) Veto Trade for empirical audit
+                            if self.ghost_trades.get(ticker) is None:
+                                sl_dist = 1.5 * current_atr
+                                tp_dist = self.config.RISK_REWARD_RATIO * sl_dist
+                                ghost_sl = current_price - sl_dist if eval_side == "LONG" else current_price + sl_dist
+                                ghost_tp = current_price + tp_dist if eval_side == "LONG" else current_price - tp_dist
+                                
+                                self.ghost_trades[ticker] = {
+                                    'side': eval_side,
+                                    'entry_price': current_price,
+                                    'sl': ghost_sl,
+                                    'tp': ghost_tp,
+                                    'entry_time': current_time.strftime("%H:%M:%S"),
+                                    'hypothetical_risk': round(self.balance * (self.config.MAX_RISK_PCT / 100.0), 2)
+                                }
+                                print(f"[GHOST VETO INITIALIZED] {ticker} {eval_side} @ ${current_price:.2f} | Ghost SL: ${ghost_sl:.2f} | Ghost TP: ${ghost_tp:.2f}")
                         else:
                             if getattr(self.config, 'USE_ML_GATEKEEPER', False):
                                 self.ml_approved_count += 1
@@ -1046,6 +1129,8 @@ class TalksyBot:
                                 self.states[ticker] = final_side
                                 self.entry_prices[ticker] = current_price
                                 self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
+                                self.entry_ml_scores[ticker] = round(float(ml_eval.get('p_win', 0.51)) * 100.0, 1)
+                                self.entry_ml_tiers[ticker] = ml_eval.get('status', 'TIER 1 (1X)')
                                 
                                 # ATR-based Stop Loss & Take Profit
                                 sl_dist = 1.2 * current_atr if is_fade else 1.5 * current_atr
@@ -1057,6 +1142,9 @@ class TalksyBot:
                                 else:
                                     self.exit_sls[ticker] = current_price + sl_dist
                                     self.exit_tps[ticker] = max(0.01, current_price - tp_dist)
+                                    
+                                self.entry_sls[ticker] = self.exit_sls[ticker]
+                                self.entry_tps[ticker] = self.exit_tps[ticker]
                                     
                                 base_contracts = self.calculate_volatility_position_size(ticker, self.entry_prices[ticker], self.exit_sls[ticker])
                                 self.contracts[ticker] = base_contracts * size_multiplier
@@ -1079,20 +1167,22 @@ class TalksyBot:
                     p_loss, p_be, p_win = self.ml_filter.predict_safe_probability(live_feats) if self.ml_filter.is_loaded else (0.0, 0.5, 0.5)
                     p_safe = round(p_be + p_win, 4)
                     
-                    total_evals = self.ml_veto_count + self.ml_approved_count
-                    veto_precision = round((self.ml_veto_count / total_evals) * 100.0, 1) if total_evals > 0 else 81.8
+                    total_ghost_completed = self.veto_correct_count + self.veto_incorrect_count
+                    veto_precision = round((self.veto_correct_count / total_ghost_completed) * 100.0, 1) if total_ghost_completed > 0 else 100.0
                     
                     ml_state = {
                         'enabled': getattr(self.config, 'USE_ML_GATEKEEPER', False),
                         'dry_run': getattr(self.config, 'ML_DRY_RUN', True),
-                        'threshold': getattr(self.config, 'ML_CONFIDENCE_THRESHOLD', 0.65),
+                        'threshold': getattr(self.config, 'ML_TIER1_THRESHOLD', 0.51),
                         'p_safe': p_safe,
                         'p_win': round(p_win, 4),
                         'p_be': round(p_be, 4),
                         'p_loss': round(p_loss, 4),
-                        'saved_capital': round(self.ml_saved_capital, 2),
+                        'saved_capital': round(self.real_capital_saved, 2),
                         'veto_count': self.ml_veto_count,
                         'approved_count': self.ml_approved_count,
+                        'veto_correct_count': self.veto_correct_count,
+                        'veto_incorrect_count': self.veto_incorrect_count,
                         'veto_precision': veto_precision,
                         'top_features': {
                             'vol_ratio': round(float(live_feats.get('vol_ratio', 1.0)), 2),

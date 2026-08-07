@@ -534,6 +534,7 @@
                                     <th class="pb-2.5 pl-3">Time</th>
                                     <th class="pb-2.5">Symbol</th>
                                     <th class="pb-2.5">Type</th>
+                                    <th class="pb-2.5 text-[#00f2fe]">ML Score</th>
                                     <th class="pb-2.5">Amount</th>
                                     <th class="pb-2.5">Entry Price</th>
                                     <th class="pb-2.5">Exit Price</th>
@@ -542,7 +543,7 @@
                             </thead>
                             <tbody id="ledger-rows">
                                 <tr id="no-trades-row">
-                                    <td colspan="7" class="text-center py-12 text-slate-500 font-mono text-[10px]">No transactions recorded yet.</td>
+                                    <td colspan="8" class="text-center py-12 text-slate-500 font-mono text-[10px]">No transactions recorded yet.</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -693,6 +694,16 @@
                                 <span id="det-type" class="font-bold uppercase text-[#34d399]">LONG</span>
                             </div>
                             <div class="flex justify-between items-baseline py-0.5">
+                                <span>ML WIN SCORE</span>
+                                <span class="flex-1 border-b border-dotted border-white/[0.05] mx-2"></span>
+                                <span id="det-ml-score" class="font-bold text-[#00f2fe]">51.0%</span>
+                            </div>
+                            <div class="flex justify-between items-baseline py-0.5">
+                                <span>ML EXECUTION TIER</span>
+                                <span class="flex-1 border-b border-dotted border-white/[0.05] mx-2"></span>
+                                <span id="det-ml-tier" class="font-bold text-[#8b80f9]">TIER 1 (1X)</span>
+                            </div>
+                            <div class="flex justify-between items-baseline py-0.5">
                                 <span>POSITION SIZE</span>
                                 <span class="flex-1 border-b border-dotted border-white/[0.05] mx-2"></span>
                                 <span id="det-contracts" class="text-[#f3f4f6]">0.10 BTC</span>
@@ -706,6 +717,16 @@
                                 <span>ENTRY PRICE</span>
                                 <span class="flex-1 border-b border-dotted border-white/[0.05] mx-2"></span>
                                 <span id="det-entry-p" class="text-[#f3f4f6] font-semibold">---</span>
+                            </div>
+                            <div class="flex justify-between items-baseline py-0.5">
+                                <span>PLANNED STOP LOSS</span>
+                                <span class="flex-1 border-b border-dotted border-white/[0.05] mx-2"></span>
+                                <span id="det-initial-sl" class="text-[#f87171] font-semibold">---</span>
+                            </div>
+                            <div class="flex justify-between items-baseline py-0.5">
+                                <span>PLANNED TAKE PROFIT</span>
+                                <span class="flex-1 border-b border-dotted border-white/[0.05] mx-2"></span>
+                                <span id="det-initial-tp" class="text-[#34d399] font-semibold">---</span>
                             </div>
                             <div class="flex justify-between items-baseline py-0.5">
                                 <span>EXIT TIMESTAMP</span>
@@ -1815,6 +1836,16 @@
             document.getElementById('det-entry-p').textContent = `$${entryVal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
             document.getElementById('det-entry-t').textContent = trade.entry_time || 'N/A';
             
+            // ML Telemetry & Target Details
+            document.getElementById('det-ml-score').textContent = trade.ml_score || '51.0%';
+            document.getElementById('det-ml-tier').textContent = trade.ml_tier || 'TIER 1 (1X)';
+            
+            const slVal = Number(trade.initial_sl || 0.0);
+            document.getElementById('det-initial-sl').textContent = slVal > 0 ? `$${slVal.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '---';
+            
+            const tpVal = Number(trade.initial_tp || 0.0);
+            document.getElementById('det-initial-tp').textContent = tpVal > 0 ? `$${tpVal.toLocaleString('en-US', { minimumFractionDigits: 2 })}` : '---';
+            
             // Exit details
             const exitVal = Number(trade.exit_price || 0.0);
             document.getElementById('det-exit-p').textContent = `$${exitVal.toLocaleString('en-US', { minimumFractionDigits: 2 })}`;
@@ -2300,6 +2331,7 @@
                         <td class="py-2.5 pl-3 font-semibold text-slate-500">${timePart}</td>
                         <td class="text-slate-300 font-bold py-2.5">${trade.ticker || 'BTC/USDT'}</td>
                         <td class="${typeColor} font-bold py-2.5">${trade.type}</td>
+                        <td class="text-[#00f2fe] font-bold py-2.5">${trade.ml_score || '51.0%'}</td>
                         <td class="text-[#8b80f9] font-bold py-2.5">${amountStr}</td>
                         <td class="text-slate-400 py-2.5">${trade.entry_price ? trade.entry_price.toFixed(1) : '---'}</td>
                         <td class="text-slate-400 py-2.5">${trade.exit_price ? trade.exit_price.toFixed(1) : '---'}</td>
@@ -2310,7 +2342,7 @@
             } else {
                 ledgerRows.innerHTML = `
                     <tr id="no-trades-row">
-                        <td colspan="7" class="text-center py-12 text-slate-700 font-mono text-[10px]">No transactions recorded yet.</td>
+                        <td colspan="8" class="text-center py-12 text-slate-700 font-mono text-[10px]">No transactions recorded yet.</td>
                     </tr>
                 `;
             }

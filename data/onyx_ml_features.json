@@ -25,7 +25,7 @@
     "hour_sin",
     "hour_cos"
   ],
-  "tier1_threshold": 0.51,
+  "tier1_threshold": 0.52,
   "tier2_threshold": 0.53,
   "n_features": 24,
   "metadata": {

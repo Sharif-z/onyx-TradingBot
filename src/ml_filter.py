@@ -223,13 +223,13 @@ class MLFilter:
             'reason': reason
         }
 
-    def evaluate_tier(self, active_row: pd.Series, prev_row: pd.Series, side: str, tier1_cutoff: float = 0.51, tier2_cutoff: float = 0.53) -> dict:
+    def evaluate_tier(self, active_row: pd.Series, prev_row: pd.Series, side: str, tier1_cutoff: float = 0.52, tier2_cutoff: float = 0.53) -> dict:
         """Evaluates live tick setup against dual-tier matrix thresholds (Tier 1 Standard vs Tier 2 Fade)."""
         if not self.is_loaded:
             return {
                 'approved': True,
-                'p_win': 0.51,
-                'p_safe': 0.51,
+                'p_win': 0.52,
+                'p_safe': 0.52,
                 'tier_level': 1,
                 'multiplier': 1.0,
                 'reason': '[ML_GATE] Model not loaded — Default 1x'

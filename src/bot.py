@@ -50,12 +50,17 @@ class TalksyBot:
         self.veto_correct_count = 0
         self.veto_incorrect_count = 0
         self.real_capital_saved = 0.0
+        self.missed_limit_wins = 0
+        self.expired_limit_count = 0
         
         # Entry Audit Metadata Caching
         self.entry_ml_scores = {t: None for t in self.tickers}
         self.entry_ml_tiers = {t: None for t in self.tickers}
         self.entry_sls = {t: None for t in self.tickers}
         self.entry_tps = {t: None for t in self.tickers}
+        
+        # Pending Limit Orders Queue (0.20x ATR Pullback, 2-Candle TTL Expiration)
+        self.pending_orders = {t: None for t in self.tickers}
         
         # Setup Ledger File and Cache Directory
         os.makedirs(os.path.dirname(self.config.LEDGER_FILE), exist_ok=True)
@@ -303,6 +308,38 @@ class TalksyBot:
                             print(f"[SYSTEM] Persistent recovery: Restored active {self.states[t]} position for {t} at entry ${self.entry_prices[t]:.2f}.")
             except Exception as e:
                 print(f"[WARN] Failed to load persistent bot state JSON: {e}")
+
+    def get_total_portfolio_heat(self) -> float:
+        """
+        Calculates total portfolio heat % including active positions AND pending limit orders ("Ghost Margin Safeguard").
+        """
+        if self.balance <= 0:
+            return 0.0
+            
+        total_risk = 0.0
+        
+        # 1. Active Positions Risk Exposure
+        for t in self.tickers:
+            if self.states.get(t) != "IDLE":
+                entry_p = self.entry_prices.get(t, 0.0)
+                exit_sl = self.exit_sls.get(t, 0.0)
+                cnt = self.contracts.get(t, 0.0)
+                if entry_p > 0 and exit_sl > 0 and cnt > 0:
+                    dist = abs(entry_p - exit_sl)
+                    total_risk += dist * cnt
+                    
+        # 2. Pending Limit Orders Risk Exposure (Ghost Margin Lock)
+        for t in self.tickers:
+            p_ord = self.pending_orders.get(t)
+            if p_ord is not None:
+                limit_p = p_ord.get('limit_price', 0.0)
+                sl_p = p_ord.get('sl', 0.0)
+                cnt = p_ord.get('contracts', 0.0)
+                if limit_p > 0 and sl_p > 0 and cnt > 0:
+                    dist = abs(limit_p - sl_p)
+                    total_risk += dist * cnt
+                    
+        return (total_risk / self.balance) * 100.0
 
     def calculate_volatility_position_size(self, ticker: str, entry_price: float, stop_loss_price: float) -> float:
         """
@@ -762,33 +799,105 @@ class TalksyBot:
                         risk_amt = ghost.get('hypothetical_risk', 30.0)
                         
                         ghost_done = False
-                        if g_side == "LONG":
-                            if low_val <= g_sl:
-                                # Veto was CORRECT (prevented a loss!)
-                                self.veto_correct_count += 1
-                                self.real_capital_saved += risk_amt
-                                print(f"[GHOST VETO CORRECT] {ticker} LONG hit SL @ ${low_val:.2f} <= ${g_sl:.2f}. ML saved ${risk_amt:.2f} USD!")
-                                ghost_done = True
-                            elif high_val >= g_tp:
-                                # Veto was INCORRECT (blocked a win!)
-                                self.veto_incorrect_count += 1
-                                print(f"[GHOST VETO INCORRECT] {ticker} LONG hit TP @ ${high_val:.2f} >= ${g_tp:.2f}. ML blocked a winning trade.")
-                                ghost_done = True
-                        elif g_side == "SHORT":
-                            if high_val >= g_sl:
-                                # Veto was CORRECT (prevented a loss!)
-                                self.veto_correct_count += 1
-                                self.real_capital_saved += risk_amt
-                                print(f"[GHOST VETO CORRECT] {ticker} SHORT hit SL @ ${high_val:.2f} >= ${g_sl:.2f}. ML saved ${risk_amt:.2f} USD!")
-                                ghost_done = True
-                            elif low_val <= g_tp:
-                                # Veto was INCORRECT (blocked a win!)
-                                self.veto_incorrect_count += 1
-                                print(f"[GHOST VETO INCORRECT] {ticker} SHORT hit TP @ ${low_val:.2f} <= ${g_tp:.2f}. ML blocked a winning trade.")
-                                ghost_done = True
+                        if ghost.get('is_expired_limit', False):
+                            # Expired Limit Order Tracking
+                            if g_side == "LONG":
+                                if high_val >= g_tp:
+                                    self.missed_limit_wins += 1
+                                    print(f"[MISSED LIMIT WIN] Expired {ticker} LONG Limit Order would have hit TP @ ${high_val:.2f} >= ${g_tp:.2f}!")
+                                    ghost_done = True
+                                elif low_val <= g_sl:
+                                    ghost_done = True
+                            elif g_side == "SHORT":
+                                if low_val <= g_tp:
+                                    self.missed_limit_wins += 1
+                                    print(f"[MISSED LIMIT WIN] Expired {ticker} SHORT Limit Order would have hit TP @ ${low_val:.2f} <= ${g_tp:.2f}!")
+                                    ghost_done = True
+                                elif high_val >= g_sl:
+                                    ghost_done = True
+                        else:
+                            # Standard ML Gatekeeper Veto Tracking
+                            if g_side == "LONG":
+                                if low_val <= g_sl:
+                                    # Veto was CORRECT (prevented a loss!)
+                                    self.veto_correct_count += 1
+                                    self.real_capital_saved += risk_amt
+                                    print(f"[GHOST VETO CORRECT] {ticker} LONG hit SL @ ${low_val:.2f} <= ${g_sl:.2f}. ML saved ${risk_amt:.2f} USD!")
+                                    ghost_done = True
+                                elif high_val >= g_tp:
+                                    # Veto was INCORRECT (blocked a win!)
+                                    self.veto_incorrect_count += 1
+                                    print(f"[GHOST VETO INCORRECT] {ticker} LONG hit TP @ ${high_val:.2f} >= ${g_tp:.2f}. ML blocked a winning trade.")
+                                    ghost_done = True
+                            elif g_side == "SHORT":
+                                if high_val >= g_sl:
+                                    # Veto was CORRECT (prevented a loss!)
+                                    self.veto_correct_count += 1
+                                    self.real_capital_saved += risk_amt
+                                    print(f"[GHOST VETO CORRECT] {ticker} SHORT hit SL @ ${high_val:.2f} >= ${g_sl:.2f}. ML saved ${risk_amt:.2f} USD!")
+                                    ghost_done = True
+                                elif low_val <= g_tp:
+                                    # Veto was INCORRECT (blocked a win!)
+                                    self.veto_incorrect_count += 1
+                                    print(f"[GHOST VETO INCORRECT] {ticker} SHORT hit TP @ ${low_val:.2f} <= ${g_tp:.2f}. ML blocked a winning trade.")
+                                    ghost_done = True
                                 
                         if ghost_done:
                             self.ghost_trades[ticker] = None
+                    
+                    # 0b. Process Pending Limit Orders Queue (Fill Checks & TTL Expiration)
+                    pending = self.pending_orders.get(ticker)
+                    if pending is not None:
+                        p_side = pending['side']
+                        p_limit = pending['limit_price']
+                        high_val = float(active_row['high'])
+                        low_val = float(active_row['low'])
+                        
+                        is_filled = False
+                        if p_side == "LONG" and low_val <= p_limit:
+                            is_filled = True
+                        elif p_side == "SHORT" and high_val >= p_limit:
+                            is_filled = True
+                            
+                        if is_filled:
+                            # Limit Order FILLED! Transition to active trade
+                            self.states[ticker] = p_side
+                            self.entry_prices[ticker] = p_limit
+                            self.exit_sls[ticker] = pending['sl']
+                            self.exit_tps[ticker] = pending['tp']
+                            self.contracts[ticker] = pending['contracts']
+                            self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
+                            self.entry_ml_scores[ticker] = pending.get('ml_score', 51.0)
+                            self.entry_ml_tiers[ticker] = pending.get('ml_tier', 'TIER 1 (1X)')
+                            self.entry_sls[ticker] = pending['sl']
+                            self.entry_tps[ticker] = pending['tp']
+                            
+                            # Deduct Binance VIP 0 Maker Fee (0.02% of entry position value)
+                            maker_fee = (p_limit * pending['contracts']) * 0.0002
+                            self.balance -= maker_fee
+                            
+                            print(f"[LIMIT ORDER FILLED] {ticker} {p_side} Limit @ ${p_limit:.2f} (Candle Low: ${low_val:.2f}, High: ${high_val:.2f}) | Maker Fee: -${maker_fee:.2f} USD")
+                            self.pending_orders[ticker] = None
+                            self._save_bot_state()
+                        else:
+                            # TTL Expiration Check (2 candles = 30 mins)
+                            if active_row['timestamp'] != pending.get('last_candle_ts'):
+                                pending['last_candle_ts'] = active_row['timestamp']
+                                pending['candles_remaining'] -= 1
+                                if pending['candles_remaining'] <= 0:
+                                    print(f"[LIMIT ORDER EXPIRED] {ticker} {p_side} Limit @ ${p_limit:.2f} expired after 2 candles without fill. Order cancelled.")
+                                    self.expired_limit_count += 1
+                                    # Route expired limit into Ghost Tracking Engine
+                                    self.ghost_trades[ticker] = {
+                                        'side': p_side,
+                                        'entry_price': p_limit,
+                                        'sl': pending['sl'],
+                                        'tp': pending['tp'],
+                                        'entry_time': current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                                        'hypothetical_risk': abs(p_limit - pending['sl']) * pending['contracts'],
+                                        'is_expired_limit': True
+                                    }
+                                    self.pending_orders[ticker] = None
                     
                     # Extract indicators for UI
                     indicators = {
@@ -981,11 +1090,12 @@ class TalksyBot:
                             elif ticker_state == "SHORT":
                                 pnl_dollar = self.contracts[ticker] * (self.entry_prices[ticker] - exit_price)
                                 
-                            # Deduct Binance VIP 0 Maker Fee (0.02% of entry value + 0.02% of exit value)
-                            entry_val = self.contracts[ticker] * self.entry_prices[ticker]
+                            # Deduct Binance VIP 0 Exit Fee (0.02% Maker for TP limit exit, 0.05% Taker for SL/panic market exit)
                             exit_val = self.contracts[ticker] * exit_price
-                            maker_fee = (entry_val + exit_val) * 0.0002
-                            pnl_dollar -= maker_fee
+                            is_limit_exit = ("Take Profit" in cause)
+                            fee_rate = 0.0002 if is_limit_exit else 0.0005
+                            exit_fee = exit_val * fee_rate
+                            pnl_dollar -= exit_fee
                             
                             self.balance += pnl_dollar
                             exit_time_str = current_time.strftime("%Y-%m-%d %H:%M:%S")
@@ -1061,7 +1171,7 @@ class TalksyBot:
                                 active_row=active_row,
                                 prev_row=prev_row,
                                 side=eval_side,
-                                tier1_cutoff=getattr(self.config, 'ML_TIER1_THRESHOLD', 0.51),
+                                tier1_cutoff=getattr(self.config, 'ML_TIER1_THRESHOLD', 0.52),
                                 tier2_cutoff=getattr(self.config, 'ML_TIER2_THRESHOLD', 0.53)
                             )
                         
@@ -1126,38 +1236,76 @@ class TalksyBot:
                                 self.ml_veto_logs.append(ml_eval)
                                 self.ml_veto_logs = self.ml_veto_logs[-50:]
                                 
-                                self.states[ticker] = final_side
-                                self.entry_prices[ticker] = current_price
-                                self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
-                                self.entry_ml_scores[ticker] = round(float(ml_eval.get('p_win', 0.51)) * 100.0, 1)
-                                self.entry_ml_tiers[ticker] = ml_eval.get('status', 'TIER 1 (1X)')
-                                
-                                # ATR-based Stop Loss & Take Profit
+                                # ATR-based Stop Loss & Take Profit distances
                                 sl_dist = 1.2 * current_atr if is_fade else 1.5 * current_atr
                                 tp_dist = 1.0 * sl_dist if is_fade else self.config.RISK_REWARD_RATIO * sl_dist
                                 
-                                if final_side == "LONG":
-                                    self.exit_sls[ticker] = max(0.01, current_price - sl_dist)
-                                    self.exit_tps[ticker] = current_price + tp_dist
+                                # Check if Limit Orders are enabled (default True)
+                                use_limit = getattr(self.config, 'USE_LIMIT_ORDERS', True)
+                                
+                                if use_limit:
+                                    # Calculate 0.20x ATR Pullback Limit Price
+                                    limit_offset = 0.20 * current_atr
+                                    if final_side == "LONG":
+                                        limit_price = current_price - limit_offset
+                                        calc_sl = max(0.01, limit_price - sl_dist)
+                                        calc_tp = limit_price + tp_dist
+                                    else:
+                                        limit_price = current_price + limit_offset
+                                        calc_sl = limit_price + sl_dist
+                                        calc_tp = max(0.01, limit_price - tp_dist)
+                                        
+                                    base_contracts = self.calculate_volatility_position_size(ticker, limit_price, calc_sl)
+                                    calc_contracts = base_contracts * size_multiplier
+                                    
+                                    if self.pending_orders.get(ticker) is None:
+                                        self.pending_orders[ticker] = {
+                                            'side': final_side,
+                                            'limit_price': round(limit_price, 4),
+                                            'sl': round(calc_sl, 4),
+                                            'tp': round(calc_tp, 4),
+                                            'contracts': calc_contracts,
+                                            'candles_remaining': 2,  # 30-minute TTL expiration
+                                            'last_candle_ts': active_row['timestamp'],
+                                            'ml_score': round(float(ml_eval.get('p_win', 0.51)) * 100.0, 1),
+                                            'ml_tier': ml_eval.get('status', 'TIER 1 (1X)')
+                                        }
+                                        tier_str = "🔥 TIER 2 SNIPER FADE (5X)" if is_fade else "🟢 TIER 1 STANDARD (1X)"
+                                        print(f"[{tier_str}] {ticker} {final_side} Limit Order QUEUED @ ${limit_price:.2f} (0.20x ATR Pullback) | TTL: 2 Candles (30m) | SL: ${calc_sl:.2f} | TP: ${calc_tp:.2f}")
                                 else:
-                                    self.exit_sls[ticker] = current_price + sl_dist
-                                    self.exit_tps[ticker] = max(0.01, current_price - tp_dist)
+                                    # Instant Market Entry Fallback
+                                    self.states[ticker] = final_side
+                                    self.entry_prices[ticker] = current_price
+                                    self.entry_times[ticker] = current_time.strftime("%Y-%m-%d %H:%M:%S")
+                                    self.entry_ml_scores[ticker] = round(float(ml_eval.get('p_win', 0.51)) * 100.0, 1)
+                                    self.entry_ml_tiers[ticker] = ml_eval.get('status', 'TIER 1 (1X)')
                                     
-                                self.entry_sls[ticker] = self.exit_sls[ticker]
-                                self.entry_tps[ticker] = self.exit_tps[ticker]
+                                    if final_side == "LONG":
+                                        self.exit_sls[ticker] = max(0.01, current_price - sl_dist)
+                                        self.exit_tps[ticker] = current_price + tp_dist
+                                    else:
+                                        self.exit_sls[ticker] = current_price + sl_dist
+                                        self.exit_tps[ticker] = max(0.01, current_price - tp_dist)
+                                        
+                                    self.entry_sls[ticker] = self.exit_sls[ticker]
+                                    self.entry_tps[ticker] = self.exit_tps[ticker]
+                                        
+                                    base_contracts = self.calculate_volatility_position_size(ticker, self.entry_prices[ticker], self.exit_sls[ticker])
+                                    self.contracts[ticker] = base_contracts * size_multiplier
+                                    self.initial_risks[ticker] = abs(self.entry_prices[ticker] - self.exit_sls[ticker])
                                     
-                                base_contracts = self.calculate_volatility_position_size(ticker, self.entry_prices[ticker], self.exit_sls[ticker])
-                                self.contracts[ticker] = base_contracts * size_multiplier
-                                self.initial_risks[ticker] = abs(self.entry_prices[ticker] - self.exit_sls[ticker])
-                                
-                                self.candle_close_count_wrong_side[ticker] = 0
-                                self.last_closed_candle_times[ticker] = closed_row['timestamp']
-                                self.low_sentiment_ticks[ticker] = 0
-                                self.breakeven_locked[ticker] = False
-                                self._save_bot_state()
-                                
-                                tier_str = "🔥 TIER 2 SNIPER FADE (5X)" if is_fade else "🟢 TIER 1 STANDARD (1X)"
-                                print(f"[{tier_str}] {ticker} {final_side} @ ${current_price:.2f} | Score: {ml_eval.get('p_win', 0.51)*100:.1f}% | SL: ${self.exit_sls[ticker]:.2f} | TP: ${self.exit_tps[ticker]:.2f}")
+                                    # Deduct Binance VIP 0 Taker Fee for instant market entry
+                                    taker_fee = (current_price * self.contracts[ticker]) * 0.0005
+                                    self.balance -= taker_fee
+                                    
+                                    self.candle_close_count_wrong_side[ticker] = 0
+                                    self.last_closed_candle_times[ticker] = closed_row['timestamp']
+                                    self.low_sentiment_ticks[ticker] = 0
+                                    self.breakeven_locked[ticker] = False
+                                    self._save_bot_state()
+                                    
+                                    tier_str = "🔥 TIER 2 SNIPER FADE (5X)" if is_fade else "🟢 TIER 1 STANDARD (1X)"
+                                    print(f"[{tier_str}] {ticker} {final_side} @ ${current_price:.2f} | Score: {ml_eval.get('p_win', 0.51)*100:.1f}% | SL: ${self.exit_sls[ticker]:.2f} | TP: ${self.exit_tps[ticker]:.2f}")
                     
                     sess_status, sess_countdown = self.get_session_status_and_countdown(active_row['timestamp'] if self.simulation_mode else None)
                     
@@ -1173,7 +1321,7 @@ class TalksyBot:
                     ml_state = {
                         'enabled': getattr(self.config, 'USE_ML_GATEKEEPER', False),
                         'dry_run': getattr(self.config, 'ML_DRY_RUN', True),
-                        'threshold': getattr(self.config, 'ML_TIER1_THRESHOLD', 0.51),
+                        'threshold': getattr(self.config, 'ML_TIER1_THRESHOLD', 0.52),
                         'p_safe': p_safe,
                         'p_win': round(p_win, 4),
                         'p_be': round(p_be, 4),
